@@ -1,5 +1,11 @@
 # Go Music Engine: controles de consola
 
+## Integración con Laravel
+
+El [contrato de la API v1](../utrack-fly/objetivos/01-contrato-laravel-engine-api-v1.md) define equipos, credenciales, configuración de zonas, canciones, órdenes y estado observado. La fuente de verdad está en `objetivos/` del proyecto Laravel (el enlace supone ambos repositorios en la misma carpeta).
+
+El nuevo `cmd/agent` implementa conexión HTTP, heartbeat, sincronización por Reverb y deduplicación durable de órdenes, en modo **configuración sin audio**. Configura `ENGINE_SERVER` (URL base de Laravel), `ENGINE_TOKEN` y `ENGINE_STATE_DIR`, y ejecuta `go run ./cmd/agent`. Consulta [Objetivo 02](../utrack-fly/objetivos/02-conexion-y-sincronizacion-del-engine.md) para la puesta en marcha, alcance y cierre verificado con Laravel, Reverb y Go reales. El programa de consola descrito a continuación se conserva separado.
+
 Player local y modular para Windows:
 
 ```text
@@ -64,7 +70,7 @@ Desde Go, `SetVolume(float64)` acepta **0 a 1**. `GetState()` devuelve una copia
 
 Oto mantiene un contexto por proceso y usa la frecuencia del primer MP3. Las canciones de la lista deben tener esa misma frecuencia; si difieren se informa un error sin interrumpir la pista actual. No se ha agregado resampling. Windows determina la salida; Pause/Stop pueden dejar sonar brevemente audio ya enviado al dispositivo.
 
-No se implementan HTTP, Laravel, scheduler, zonas ni Dante. El laboratorio WASAPI previo se conserva solo como documentación histórica en `docs/`.
+La consola de audio no se integra todavía con el agente HTTP/WebSocket ni con salidas multizona. No se implementan scheduler ni Dante. El laboratorio WASAPI previo se conserva solo como documentación histórica en `docs/`.
 
 ## Verificación
 
@@ -83,4 +89,4 @@ $env:MUSIC_ENGINE_TEST_MP3 = (Resolve-Path music/demo.mp3).Path
 go test ./internal/player -v -count=1
 ```
 
-Se comprobaron errores de archivo, lista vacía, volumen inválido, estados, pausa/reanudación, navegación circular, cancelación y la secuencia de comandos de consola. No hay dependencias nuevas en esta etapa.
+Se comprobaron errores de archivo, lista vacía, volumen inválido, estados, pausa/reanudación, navegación circular, cancelación y la secuencia de comandos de consola. Las pruebas del agente conectado están en `internal/control`; su cliente WebSocket utiliza `github.com/gorilla/websocket`.

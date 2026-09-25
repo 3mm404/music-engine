@@ -2,12 +2,15 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"sort"
+	"strings"
 
+	"music-engine/internal/console"
 	"music-engine/internal/player"
 )
 
@@ -19,19 +22,35 @@ func main() {
 }
 
 func run() error {
-	path := flag.String("file", "music/demo.mp3", "ruta del archivo MP3")
+	// Conserva la ruta predeterminada que ya funciona en esta maquina.
+	path := flag.String("file", "C:\\Users\\perez\\Desktop\\dev\\music-engine\\music\\demo.mp3", "ruta del MP3 inicial")
 	flag.Parse()
+	tracks, err := tracksIn(filepath.Dir(*path))
+	if err != nil {
+		return err
+	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
-	p := player.New()
+	p := player.New(tracks...)
 	defer p.Stop()
 	if err := p.Play(*path); err != nil {
 		return err
 	}
-	fmt.Printf("Reproduciendo %s. Ctrl+C para detener.\n", *path)
-	if err := p.Wait(ctx); err != nil && !errors.Is(err, context.Canceled) {
-		return err
+	return console.Run(ctx, p, os.Stdin, os.Stdout)
+}
+
+// Lista simple, ordenada por nombre y cargada una vez al iniciar.
+func tracksIn(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("leer carpeta de musica: %w", err)
 	}
-	fmt.Println("Reproduccion finalizada.")
-	return nil
+	var tracks []string
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.EqualFold(filepath.Ext(entry.Name()), ".mp3") {
+			tracks = append(tracks, filepath.Join(dir, entry.Name()))
+		}
+	}
+	sort.Strings(tracks)
+	return tracks, nil
 }

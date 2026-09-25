@@ -22,7 +22,8 @@ func main() {
 }
 
 func run() error {
-	// Conserva la ruta predeterminada que ya funciona en esta maquina.
+	// Conserva la ruta predeterminada que ya funciona en esta maquina
+	// EJ.: C:\Users\perez\Desktop\dev\music-engine\music\demo.mp3
 	path := flag.String("file", "C:\\Users\\perez\\Desktop\\dev\\music-engine\\music\\demo.mp3", "ruta del MP3 inicial")
 	flag.Parse()
 	tracks, err := tracksIn(filepath.Dir(*path))

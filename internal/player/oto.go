@@ -64,3 +64,5 @@ func (o *audioOutput) err() error {
 	}
 	return o.player.Err()
 }
+
+func (o *audioOutput) setVolume(volume float64) { o.player.SetVolume(volume) }

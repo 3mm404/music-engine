@@ -1,68 +1,70 @@
-# Go Music Engine para Windows
+# Go Music Engine: controles de consola
 
-Demo de reproducción local: abre un MP3, lo decodifica progresivamente y reproduce hasta el final. Oto se encarga del sistema de audio; nuestro código no utiliza WASAPI directamente.
+Player local y modular para Windows:
 
 ```text
-MP3 → Decoder → PCM → Player → Oto v3 → Windows Audio → Bocinas
+MP3 → Decoder (go-mp3) → PCM → Player → Oto v3 → Windows Audio
 ```
 
 ## Ejecutar
 
-Requiere Windows y Go 1.26 o posterior. Desde PowerShell:
+Requiere Windows y Go 1.26 o posterior. Se conserva la ruta absoluta predeterminada que funciona en esta máquina.
 
 ```powershell
 cd C:\Users\perez\Desktop\dev\music-engine
 go mod download
-```
-
-Coloca tu archivo en **music/demo.mp3**. No se distribuye música de terceros con el proyecto. Ejecuta desde la raíz:
-
-```powershell
 go run ./cmd/engine
 ```
 
-También puedes indicar otra ruta:
+Empieza reproduciendo `music/demo.mp3`. Coloca más MP3 en esa carpeta para probar navegación. La lista se carga una vez al iniciar, ordenada por nombre. También puedes seleccionar un archivo inicial y su carpeta:
 
 ```powershell
-go run ./cmd/engine -file "C:\ruta\cancion.mp3"
+go run ./cmd/engine -file "C:\Mi musica\cancion.mp3"
 ```
 
-Ctrl+C detiene la reproducción y libera el archivo. Al terminar normalmente se muestra `Reproduccion finalizada.`. Para generar el ejecutable:
+## Comandos
 
-```powershell
-go build -o bin/music-engine.exe ./cmd/engine
-.\bin\music-engine.exe
+Escribe cada comando y presiona Enter:
+
+```text
+pause
+resume
+next
+previous
+volume 35
+state
+stop
+play
+quit
 ```
 
-## Organización
+- `play`: reinicia desde el principio la pista seleccionada; `play "C:\Mi musica\otra.mp3"` abre otra ruta, incluso con espacios.
+- `pause` / `resume`: conservan la posición. Sin pista cargada devuelven un error.
+- `next` / `previous`: cambian e inician la pista; al llegar a un extremo vuelven al otro. Con un solo archivo lo reinician. También funcionan desde pausa o Stop.
+- `stop`: detiene y cierra el archivo, conservando la selección y el volumen.
+- `volume 0..100`: 0 silencia; 100 es la ganancia original. No modifica el volumen global de Windows.
+- `state`: muestra STOPPED, PLAYING o PAUSED, posición en la lista, volumen y ruta.
+- `help`: muestra los comandos. `quit`, Ctrl+C o fin de entrada cierran el programa.
 
-- `cmd/engine/main.go`: configura la ruta y Ctrl+C, crea el Player e inicia la prueba.
-- `internal/decoder/mp3.go`: go-mp3 transforma MP3 a PCM signed int16 little-endian, estéreo, a la frecuencia del archivo. No conoce Oto.
-- `internal/player/player.go`: controla Play, Pause, Resume, Stop y Wait; administra el archivo y la sincronización.
-- `internal/player/oto.go`: encapsula el contexto y el reproductor Oto v3, el formato PCM y los errores de salida.
-- `music/`: coloca aquí demo.mp3; los MP3 se excluyen de Git.
+Al terminar una canción el estado pasa a STOPPED y la consola permanece abierta. No hay avance automático. Una ruta abierta con `play` fuera de la lista no se agrega: next selecciona la primera y previous la última; el indicador 0/N significa que la selección no pertenece a la lista.
 
-Dependencias directas: [Oto v3](https://pkg.go.dev/github.com/ebitengine/oto/v3) y [go-mp3](https://pkg.go.dev/github.com/hajimehoshi/go-mp3). go.mod/go.sum fijan las versiones. Oto recibe PCM; no decodifica MP3.
+## Código
 
-## Contrato del Player
+- `cmd/engine/main.go`: ruta inicial, lista de archivos e inicialización.
+- `internal/console/console.go`: lectura y ejecución de comandos.
+- `internal/player/player.go`: Play, Pause, Resume, Stop, Next, Previous, SetVolume y GetState. `New(paths...)` recibe una copia de la lista opcional.
+- `internal/player/oto.go`: encapsula Oto y el volumen de salida.
+- `internal/decoder/mp3.go`: decodifica MP3 a PCM estéreo int16 little-endian.
 
-| Método | Comportamiento |
-|---|---|
-| `Play(path) error` | Abre e inicia en segundo plano; reemplaza la pista anterior si el nuevo archivo y la salida se preparan correctamente. |
-| `Pause() error` | Pausa y conserva posición y datos pendientes. |
-| `Resume() error` | Continúa una pista pausada. |
-| `Stop() error` | Detiene y cierra el archivo; repetirlo es válido. Para volver al inicio usa Play. |
-| `Wait(ctx) error` | Mantiene el proceso vivo hasta finalizar o detenerse; cancelar el contexto detiene la reproducción. |
+Desde Go, `SetVolume(float64)` acepta **0 a 1**. `GetState()` devuelve una copia con Status, Track, Index (base cero, -1 fuera de lista), Total, Volume y Error. El volumen inicial es 1 y se conserva al cambiar canciones. Una pista que no puede abrirse o cuya frecuencia es incompatible deja intacta la reproducción actual.
 
-Pause/Resume sin pista devuelven ErrNoTrack. El CLI solo expone reproducción y Ctrl+C; los cuatro controles están implementados para usarlos desde Go. Los errores durante reproducción se devuelven mediante Wait. El archivo se cierra únicamente después de que Oto termina cualquier lectura pendiente.
+`GetState()` también detecta finalización/errores y libera el archivo. La consola lo consulta periódicamente. `Wait(ctx)` sigue disponible para programas sin consola que necesiten esperar la finalización.
 
-## Límites de este demo
+## Límites actuales
 
-Oto permite un solo contexto por proceso: se crea con la frecuencia del primer MP3 y se reutiliza. Otro MP3 con distinta frecuencia devuelve un error claro; reinicia el proceso para reproducirlo. No hay resampler propio ni selector de dispositivos. Utiliza la salida configurada en Windows antes de iniciar.
+Oto mantiene un contexto por proceso y usa la frecuencia del primer MP3. Las canciones de la lista deben tener esa misma frecuencia; si difieren se informa un error sin interrumpir la pista actual. No se ha agregado resampling. Windows determina la salida; Pause/Stop pueden dejar sonar brevemente audio ya enviado al dispositivo.
 
-Wait deja 100 ms al final para la cola del dispositivo; es un margen práctico, no una confirmación exacta del instante acústico. Pause/Stop pueden dejar sonar brevemente audio ya enviado al dispositivo.
-
-Más adelante Windows Audio se direccionará hacia Dante Virtual Soundcard y Q-SYS. Esta versión no implementa esa integración ni APIs, scheduler o zonas. `docs/WASAPI-LAB-HISTORICO.md` conserva únicamente las notas del laboratorio anterior.
+No se implementan HTTP, Laravel, scheduler, zonas ni Dante. El laboratorio WASAPI previo se conserva solo como documentación histórica en `docs/`.
 
 ## Verificación
 
@@ -74,11 +76,11 @@ go vet ./...
 go build -o bin/music-engine.exe ./cmd/engine
 ```
 
-Prueba optativa de controles contra el dispositivo real (produce sonido):
+Pruebas optativas de audio real (usan copias temporales del MP3 para la navegación):
 
 ```powershell
 $env:MUSIC_ENGINE_TEST_MP3 = (Resolve-Path music/demo.mp3).Path
-go test ./internal/player -run TestPlaybackIntegration -v -count=1
+go test ./internal/player -v -count=1
 ```
 
-Sin esa variable, la prueba de audio se omite y las pruebas de errores sí se ejecutan. La validación automática no confirma que el usuario escuche las bocinas: revisa la salida y el volumen en Windows si no hay sonido.
+Se comprobaron errores de archivo, lista vacía, volumen inválido, estados, pausa/reanudación, navegación circular, cancelación y la secuencia de comandos de consola. No hay dependencias nuevas en esta etapa.

@@ -1,59 +1,84 @@
-# Music Engine: laboratorio de audio en Go para Windows
+# Go Music Engine para Windows
 
-## Alcance actual
+Demo de reproducción local: abre un MP3, lo decodifica progresivamente y reproduce hasta el final. Oto se encarga del sistema de audio; nuestro código no utiliza WASAPI directamente.
 
-Etapa 1, primer paso: obtener IAudioRenderClient desde un IAudioClient inicializado en modo compartido. Es un programa ejecutable de diagnóstico; todavía no reproduce archivos ni genera tonos. Esperaremos tu resultado antes de implementar GetBuffer y ReleaseBuffer.
+```text
+MP3 → Decoder → PCM → Player → Oto v3 → Windows Audio → Bocinas
+```
 
-No se encontró la implementación Go original en la carpeta de trabajo ni en Desktop/dev. Esta base es nueva y utiliza el endpoint predeterminado de reproducción, rol eConsole. No reemplaza código existente ni implementa selección interactiva de endpoints.
+## Ejecutar
 
-## Ejecutar en PowerShell
-
-Requisito: Windows y Go 1.26 o posterior. Las dependencias de Go necesitan acceso a Internet la primera vez si no están en caché.
+Requiere Windows y Go 1.26 o posterior. Desde PowerShell:
 
 ```powershell
 cd C:\Users\perez\Desktop\dev\music-engine
+go mod download
+```
+
+Coloca tu archivo en **music/demo.mp3**. No se distribuye música de terceros con el proyecto. Ejecuta desde la raíz:
+
+```powershell
 go run ./cmd/engine
 ```
 
-Para compilar y ejecutar el archivo EXE:
+También puedes indicar otra ruta:
+
+```powershell
+go run ./cmd/engine -file "C:\ruta\cancion.mp3"
+```
+
+Ctrl+C detiene la reproducción y libera el archivo. Al terminar normalmente se muestra `Reproduccion finalizada.`. Para generar el ejecutable:
 
 ```powershell
 go build -o bin/music-engine.exe ./cmd/engine
 .\bin\music-engine.exe
 ```
 
-Ejecuta desde una terminal para leer el resultado antes de que termine el proceso.
+## Organización
 
-## Archivos
+- `cmd/engine/main.go`: configura la ruta y Ctrl+C, crea el Player e inicia la prueba.
+- `internal/decoder/mp3.go`: go-mp3 transforma MP3 a PCM signed int16 little-endian, estéreo, a la frecuencia del archivo. No conoce Oto.
+- `internal/player/player.go`: controla Play, Pause, Resume, Stop y Wait; administra el archivo y la sincronización.
+- `internal/player/oto.go`: encapsula el contexto y el reproductor Oto v3, el formato PCM y los errores de salida.
+- `music/`: coloca aquí demo.mp3; los MP3 se excluyen de Git.
 
-- cmd/engine/main.go: programa comentado, con todo el flujo visible.
-- go.mod y go.sum: versiones y comprobación de dependencias.
-- ETAPA-1.md: conceptos y explicación del cambio nuevo.
-- bin/music-engine.exe: ejecutable generado localmente; excluido por .gitignore.
+Dependencias directas: [Oto v3](https://pkg.go.dev/github.com/ebitengine/oto/v3) y [go-mp3](https://pkg.go.dev/github.com/hajimehoshi/go-mp3). go.mod/go.sum fijan las versiones. Oto recibe PCM; no decodifica MP3.
 
-No creamos internal/audio, decoder ni wasapi todavía.
+## Contrato del Player
 
-## Validación realizada el 25 de septiembre de 2026
+| Método | Comportamiento |
+|---|---|
+| `Play(path) error` | Abre e inicia en segundo plano; reemplaza la pista anterior si el nuevo archivo y la salida se preparan correctamente. |
+| `Pause() error` | Pausa y conserva posición y datos pendientes. |
+| `Resume() error` | Continúa una pista pausada. |
+| `Stop() error` | Detiene y cierra el archivo; repetirlo es válido. Para volver al inicio usa Play. |
+| `Wait(ctx) error` | Mantiene el proceso vivo hasta finalizar o detenerse; cancelar el contexto detiene la reproducción. |
 
-Se ejecutaron gofmt, go mod tidy, go build y go vet. Compilación y análisis correctos. La ejecución real en esta máquina terminó con código 0 y mostró:
+Pause/Resume sin pista devuelven ErrNoTrack. El CLI solo expone reproducción y Ctrl+C; los cuatro controles están implementados para usarlos desde Go. Los errores durante reproducción se devuelven mediante Wait. El archivo se cierra únicamente después de que Oto termina cualquier lectura pendiente.
 
-```text
-Sample rate: 48000 Hz
-Channels: 2
-Bits por contenedor: 32
-Bytes por frame: 8
-Buffer: 1126 frames (23.46 ms)
-IAudioRenderClient obtenido correctamente
-Etapa 1 completada: acceso al servicio. Todavia no se envia PCM ni se reproduce sonido.
+## Límites de este demo
+
+Oto permite un solo contexto por proceso: se crea con la frecuencia del primer MP3 y se reutiliza. Otro MP3 con distinta frecuencia devuelve un error claro; reinicia el proceso para reproducirlo. No hay resampler propio ni selector de dispositivos. Utiliza la salida configurada en Windows antes de iniciar.
+
+Wait deja 100 ms al final para la cola del dispositivo; es un margen práctico, no una confirmación exacta del instante acústico. Pause/Stop pueden dejar sonar brevemente audio ya enviado al dispositivo.
+
+Más adelante Windows Audio se direccionará hacia Dante Virtual Soundcard y Q-SYS. Esta versión no implementa esa integración ni APIs, scheduler o zonas. `docs/WASAPI-LAB-HISTORICO.md` conserva únicamente las notas del laboratorio anterior.
+
+## Verificación
+
+```powershell
+go fmt ./...
+go mod tidy
+go test ./...
+go vet ./...
+go build -o bin/music-engine.exe ./cmd/engine
 ```
 
-También imprime el identificador del endpoint. El formato y el tamaño de buffer pueden cambiar con el dispositivo y su configuración. Esta prueba confirma acceso al servicio; no valida todavía escritura PCM ni reproducción.
+Prueba optativa de controles contra el dispositivo real (produce sonido):
 
-Si falla, copia el mensaje completo. Si no encuentra un endpoint, revisa que Windows tenga una salida de sonido habilitada y predeterminada.
+```powershell
+$env:MUSIC_ENGINE_TEST_MP3 = (Resolve-Path music/demo.mp3).Path
+go test ./internal/player -run TestPlaybackIntegration -v -count=1
+```
 
-## Dependencias
-
-- github.com/go-ole/go-ole v1.3.0: inicialización y liberación de COM.
-- github.com/moutend/go-wca v0.3.0: bindings explícitos de Windows Core Audio; no es un reproductor de alto nivel.
-
-No se ha incorporado ningún decoder ni servicio HTTP.
+Sin esa variable, la prueba de audio se omite y las pruebas de errores sí se ejecutan. La validación automática no confirma que el usuario escuche las bocinas: revisa la salida y el volumen en Windows si no hay sonido.

@@ -130,8 +130,10 @@ func TestIndependentPlaybackIntegration(t *testing.T) {
 			t.Fatalf("zone B interrupted: %+v", s)
 		}
 	}
-	for _, action := range []func() error{a.Pause, a.Resume, a.Next, a.Previous, a.Stop} {
+	for _, action := range []func() error{a.Pause, a.Resume, a.Next, a.Previous, func() error { return a.SetVolume(.03) }, a.Stop} {
 		check(action())
+		// Let the device consume audio and the independent monitor tick.
+		time.Sleep(150 * time.Millisecond)
 		assertB()
 	}
 	check(a.Play(source))

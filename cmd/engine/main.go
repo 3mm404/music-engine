@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -11,7 +12,7 @@ import (
 	"strings"
 
 	"music-engine/internal/console"
-	"music-engine/internal/player"
+	"music-engine/internal/engine"
 )
 
 func main() {
@@ -21,23 +22,52 @@ func main() {
 	}
 }
 
-func run() error {
-	// Conserva la ruta predeterminada que ya funciona en esta maquina
-	// EJ.: C:\Users\perez\Desktop\dev\music-engine\music\demo.mp3
-	path := flag.String("file", "C:\\Users\\perez\\Desktop\\dev\\music-engine\\music\\demo.mp3", "ruta del MP3 inicial")
+func run() (result error) {
+	path := flag.String("file", "music/demo.mp3", "MP3 inicial de zona A")
+	pathB := flag.String("file-b", "", "MP3 inicial de zona B; vacio inicia B detenida")
+	headless := flag.Bool("headless", false, "ejecutar sin consola hasta Ctrl+C")
 	flag.Parse()
-	tracks, err := tracksIn(filepath.Dir(*path))
+	tracks, err := initialTracks(*path)
 	if err != nil {
 		return err
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
-	p := player.New(tracks...)
-	defer p.Stop()
-	if err := p.Play(*path); err != nil {
+	tracksB := tracks
+	if *pathB != "" {
+		tracksB, err = initialTracks(*pathB)
+		if err != nil {
+			return err
+		}
+	}
+	m, err := engine.New([]engine.ZoneConfig{{ID: "A", Tracks: tracks}, {ID: "B", Tracks: tracksB}})
+	if err != nil {
 		return err
 	}
-	return console.Run(ctx, p, os.Stdin, os.Stdout)
+	defer func() { result = errors.Join(result, m.Close()) }()
+	a, _ := m.Zone("A")
+	if err := a.Play(*path); err != nil {
+		return err
+	}
+	if *pathB != "" {
+		b, _ := m.Zone("B")
+		if err := b.Play(*pathB); err != nil {
+			return err
+		}
+	}
+	if *headless {
+		fmt.Fprintln(os.Stdout, "Engine activo sin consola (zonas A/B). Ctrl+C para cerrar.")
+		<-ctx.Done()
+		return nil
+	}
+	return console.Run(ctx, m, os.Stdin, os.Stdout)
+}
+
+func initialTracks(path string) ([]string, error) {
+	if strings.Contains(path, "://") {
+		return []string{path}, nil
+	}
+	return tracksIn(filepath.Dir(path))
 }
 
 // Lista simple, ordenada por nombre y cargada una vez al iniciar.

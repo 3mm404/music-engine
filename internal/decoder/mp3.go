@@ -3,6 +3,7 @@ package decoder
 
 import (
 	"fmt"
+	"io"
 	"os"
 
 	mp3 "github.com/hajimehoshi/go-mp3"
@@ -12,7 +13,7 @@ import (
 // El decoder procesa el audio a medida que el backend lo lee.
 type Stream struct {
 	*mp3.Decoder
-	file *os.File
+	file io.ReadCloser
 }
 
 func Open(path string) (*Stream, error) {
@@ -20,10 +21,14 @@ func Open(path string) (*Stream, error) {
 	if err != nil {
 		return nil, fmt.Errorf("abrir MP3 %q: %w", path, err)
 	}
+	return OpenReader(file)
+}
+
+func OpenReader(file io.ReadCloser) (*Stream, error) {
 	decoded, err := mp3.NewDecoder(file)
 	if err != nil {
 		file.Close()
-		return nil, fmt.Errorf("decodificar MP3 %q: %w", path, err)
+		return nil, fmt.Errorf("decodificar MP3: %w", err)
 	}
 	return &Stream{Decoder: decoded, file: file}, nil
 }

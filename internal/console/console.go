@@ -8,20 +8,26 @@ import (
 	"io"
 	"strconv"
 	"strings"
-	"time"
 
+	"music-engine/internal/engine"
 	"music-engine/internal/player"
 )
 
-const help = "Comandos: play [ruta] | pause | resume | next | previous | stop | volume 0..100 | state | help | quit"
+const help = "Comandos: zone ID | zones | play [ruta] | pause | resume | next | previous | stop | volume 0..100 | state | help | quit"
 
 // Run conserva la consola abierta al terminar una pista. EOF, quit o Ctrl+C salen.
-func Run(ctx context.Context, p *player.Player, input io.Reader, output io.Writer) error {
+// El llamador posee el Manager: salir de la consola no detiene las zonas.
+func Run(ctx context.Context, manager *engine.Manager, input io.Reader, output io.Writer) error {
+	ids := manager.IDs()
+	if len(ids) == 0 {
+		return fmt.Errorf("no hay zonas configuradas")
+	}
+	selected := ids[0]
+	p, _ := manager.Zone(selected)
 	lines := make(chan string)
 	scanErrors := make(chan error, 1)
 	done := make(chan struct{})
 	defer close(done)
-	defer p.Stop()
 	go func() {
 		scanner := bufio.NewScanner(input)
 		for scanner.Scan() {
@@ -36,22 +42,39 @@ func Run(ctx context.Context, p *player.Player, input io.Reader, output io.Write
 	}()
 	fmt.Fprintln(output, help)
 	printState(output, p.GetState())
-	fmt.Fprint(output, "> ")
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
+	fmt.Fprintf(output, "[%s]> ", selected)
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-ticker.C:
-			// Detecta EOF y errores aunque el usuario no escriba un comando.
-			before := p.GetState()
-			if before.Error != nil {
-				return before.Error
-			}
 		case line, ok := <-lines:
 			if !ok {
 				return <-scanErrors
+			}
+			parts := strings.SplitN(strings.TrimSpace(line), " ", 2)
+			if strings.EqualFold(parts[0], "zone") {
+				id := ""
+				if len(parts) == 2 {
+					id = strings.TrimSpace(parts[1])
+				}
+				zone, err := manager.Zone(id)
+				if err != nil {
+					fmt.Fprintln(output, "Error:", err)
+				} else {
+					selected, p = id, zone
+					printState(output, p.GetState())
+				}
+				fmt.Fprintf(output, "[%s]> ", selected)
+				continue
+			}
+			if strings.EqualFold(strings.TrimSpace(line), "zones") {
+				for _, id := range ids {
+					zone, _ := manager.Zone(id)
+					fmt.Fprintf(output, "%s: ", id)
+					printState(output, zone.GetState())
+				}
+				fmt.Fprintf(output, "[%s]> ", selected)
+				continue
 			}
 			quit, err := execute(p, line, output)
 			if err != nil {
@@ -60,12 +83,12 @@ func Run(ctx context.Context, p *player.Player, input io.Reader, output io.Write
 			if quit {
 				return nil
 			}
-			fmt.Fprint(output, "> ")
+			fmt.Fprintf(output, "[%s]> ", selected)
 		}
 	}
 }
 
-func execute(p *player.Player, line string, output io.Writer) (bool, error) {
+func execute(p *engine.Zone, line string, output io.Writer) (bool, error) {
 	line = strings.TrimSpace(line)
 	if line == "" {
 		return false, nil
@@ -83,12 +106,6 @@ func execute(p *player.Player, line string, output io.Writer) (bool, error) {
 	switch command {
 	case "play":
 		path := strings.Trim(arg, "\"")
-		if path == "" {
-			path = p.GetState().Track
-		}
-		if path == "" {
-			return false, fmt.Errorf("usa play seguido de una ruta MP3")
-		}
 		err = p.Play(path)
 	case "pause":
 		err = p.Pause()
@@ -125,4 +142,7 @@ func execute(p *player.Player, line string, output io.Writer) (bool, error) {
 
 func printState(output io.Writer, state player.State) {
 	fmt.Fprintf(output, "%s | pista %d/%d | volumen %.0f%% | %s\n", state.Status, state.Index+1, state.Total, state.Volume*100, state.Track)
+	if state.Error != nil {
+		fmt.Fprintln(output, "Error de zona:", state.Error)
+	}
 }

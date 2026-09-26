@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -18,15 +19,20 @@ var ErrNoTrack = errors.New("no hay un archivo cargado; llama a Play primero")
 
 // Player conserva el stream mientras Oto lo lee. Sus metodos admiten concurrencia.
 type Player struct {
-	mu        sync.Mutex
-	stream    *decoder.Stream
-	audio     *audioOutput
-	paused    bool
-	tracks    []string
-	index     int
-	current   string
-	volume    float64
-	lastError error
+	mu         sync.Mutex
+	stream     *decoder.Stream
+	audio      *audioOutput
+	paused     bool
+	tracks     []string
+	index      int
+	current    string
+	volume     float64
+	lastError  error
+	remote     decoder.HTTPS
+	cancel     context.CancelFunc
+	generation uint64
+	loading    string
+	jobs       sync.WaitGroup
 }
 
 // New copia una lista opcional. El orden recibido define Next y Previous.
@@ -44,10 +50,27 @@ func (p *Player) Play(path string) error {
 }
 
 func (p *Player) playLocked(path string) error {
+	if path == "" {
+		path = p.current
+	}
+	if path == "" {
+		return ErrNoTrack
+	}
+	if strings.Contains(path, "://") {
+		if !decoder.ValidURL(path) {
+			return errors.New("audio requiere HTTPS")
+		}
+		return p.startRemoteLocked(path)
+	}
+	p.cancelLoadLocked()
 	source, err := decoder.Open(path)
 	if err != nil {
 		return err
 	}
+	return p.installLocked(path, source)
+}
+
+func (p *Player) installLocked(path string, source *decoder.Stream) error {
 	audio, err := openOutput(source, source.SampleRate())
 	if err != nil {
 		source.Close()
@@ -61,6 +84,13 @@ func (p *Player) playLocked(path string) error {
 	p.stream, p.audio, p.paused = source, audio, false
 	p.current, p.index, p.lastError = path, -1, nil
 	for i, track := range p.tracks {
+		if track == path {
+			p.index = i
+			break
+		}
+		if strings.Contains(path, "://") {
+			continue
+		}
 		a, _ := filepath.Abs(track)
 		b, _ := filepath.Abs(path)
 		if strings.EqualFold(a, b) {
@@ -70,6 +100,86 @@ func (p *Player) playLocked(path string) error {
 	}
 	audio.setVolume(p.volume)
 	audio.play()
+	return nil
+}
+
+func (p *Player) cancelLoadLocked() {
+	p.generation++
+	if p.cancel != nil {
+		p.cancel()
+		p.cancel = nil
+	}
+	// Workers never need p.mu to finish downloading. Waiting prevents overlapping
+	// allocations when a caller rapidly switches songs.
+	p.jobs.Wait()
+	p.loading = ""
+}
+
+func (p *Player) startRemoteLocked(path string) error {
+	p.cancelLoadLocked()
+	if err := p.stopLocked(); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	p.cancel = cancel
+	generation := p.generation
+	p.current, p.index, p.lastError, p.loading = path, -1, nil, "LOADING"
+	for i, track := range p.tracks {
+		if path == track {
+			p.index = i
+			break
+		}
+	}
+	// Status callbacks and installation use separate events; the download worker
+	// can always exit during cancellation even while the player lock is held.
+	events := make(chan string, 3)
+	type result struct {
+		stream *decoder.Stream
+		err    error
+	}
+	results := make(chan result)
+	p.jobs.Add(1)
+	go func() {
+		defer p.jobs.Done()
+		source, err := p.remote.Open(ctx, path, func() { events <- "RECOVERING" })
+		select {
+		case results <- result{source, err}:
+		case <-ctx.Done():
+			if source != nil {
+				source.Close()
+			}
+		}
+	}()
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case status := <-events:
+				p.mu.Lock()
+				if generation == p.generation {
+					p.loading = status
+				}
+				p.mu.Unlock()
+			case r := <-results:
+				p.mu.Lock()
+				defer p.mu.Unlock()
+				if generation != p.generation {
+					if r.stream != nil {
+						r.stream.Close()
+					}
+					return
+				}
+				p.loading = ""
+				if r.err == nil {
+					r.err = p.installLocked(path, r.stream)
+				}
+				p.lastError = r.err
+				cancel()
+				return
+			}
+		}
+	}()
 	return nil
 }
 
@@ -104,6 +214,7 @@ func (p *Player) Resume() error {
 func (p *Player) Stop() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.cancelLoadLocked()
 	return p.stopLocked()
 }
 
@@ -125,9 +236,19 @@ func (p *Player) Wait(ctx context.Context) error {
 	defer ticker.Stop()
 	for {
 		p.mu.Lock()
+		if p.audio == nil && p.loading == "" {
+			err := p.lastError
+			p.mu.Unlock()
+			return err
+		}
 		if p.audio == nil {
 			p.mu.Unlock()
-			return nil
+			select {
+			case <-ctx.Done():
+				return errors.Join(ctx.Err(), p.Stop())
+			case <-ticker.C:
+			}
+			continue
 		}
 		current := p.audio
 		err := current.err()
@@ -183,13 +304,26 @@ func (p *Player) GetState() State {
 		p.lastError = p.stopLocked()
 	}
 	status := "STOPPED"
+	if p.lastError != nil {
+		status = "ERROR"
+	}
+	if p.loading != "" {
+		status = p.loading
+	}
 	if p.audio != nil {
 		status = "PLAYING"
 		if p.paused {
 			status = "PAUSED"
 		}
 	}
-	return State{Status: status, Track: p.current, Index: p.index, Total: len(p.tracks), Volume: p.volume, Error: p.lastError}
+	track := p.current
+	if strings.Contains(track, "://") {
+		if u, err := url.Parse(track); err == nil {
+			u.RawQuery = ""
+			track = u.String()
+		}
+	}
+	return State{Status: status, Track: track, Index: p.index, Total: len(p.tracks), Volume: p.volume, Error: p.lastError}
 }
 
 // SetVolume conserva la ganancia para pistas futuras, incluso estando detenido.

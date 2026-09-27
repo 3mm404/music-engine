@@ -16,6 +16,7 @@ type captureOutput struct {
 	format audio.PCMFormat
 	stream *captureStream
 	calls  int
+	closed int
 }
 
 type captureStream struct {
@@ -30,6 +31,13 @@ func (o *captureOutput) Open(source io.Reader, format audio.PCMFormat) (audio.St
 	o.source, o.format = source, format
 	o.stream = &captureStream{}
 	return o.stream, nil
+}
+
+func (o *captureOutput) Close() error {
+	o.mu.Lock()
+	o.closed++
+	o.mu.Unlock()
+	return nil
 }
 
 func (s *captureStream) Play() {
@@ -106,6 +114,12 @@ func TestRoutesSimultaneousStereoZonesToInterleavedFrame(t *testing.T) {
 	}
 	if backend.calls != 1 || backend.format.Channels != 4 {
 		t.Fatalf("opened %d backend streams with format %+v, want one 4-channel stream", backend.calls, backend.format)
+	}
+	if err := router.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if backend.closed != 1 {
+		t.Fatalf("shared backend close count = %d, want 1", backend.closed)
 	}
 }
 

@@ -5,6 +5,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"music-engine/internal/audio"
+	"music-engine/internal/audio/backend"
 	"music-engine/internal/control"
 	"os"
 	"os/signal"
@@ -36,7 +38,15 @@ func main() {
 			profile = control.PlaybackProfile
 		}
 	}
-	if err := control.RunProfile(ctx, os.Getenv("ENGINE_SERVER"), os.Getenv("ENGINE_TOKEN"), version, dir, profile); err != nil {
+	var output audio.Output
+	if profile == control.PlaybackProfile || profile == control.MonoProfile {
+		var err error
+		output, err = backend.FromEnvironment()
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+	if err := control.RunProfileWithOutput(ctx, os.Getenv("ENGINE_SERVER"), os.Getenv("ENGINE_TOKEN"), version, dir, profile, output); err != nil {
 		log.Fatal(err)
 	}
 }

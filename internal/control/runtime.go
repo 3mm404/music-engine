@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"math/rand/v2"
+	"music-engine/internal/audio"
 	"music-engine/internal/decoder"
 	"music-engine/internal/engine"
 	"net/http"
@@ -218,6 +219,10 @@ func Run(ctx context.Context, server, token, version, stateDir string) error {
 }
 
 func RunProfile(ctx context.Context, server, token, version, stateDir, profile string) error {
+	return RunProfileWithOutput(ctx, server, token, version, stateDir, profile, nil)
+}
+
+func RunProfileWithOutput(ctx context.Context, server, token, version, stateDir, profile string, output audio.Output) error {
 	if profile != "configuration_only" && profile != PlaybackProfile && profile != MonoProfile {
 		return errors.New("ENGINE_PROFILE invalido")
 	}
@@ -262,10 +267,14 @@ func RunProfile(ctx context.Context, server, token, version, stateDir, profile s
 	r := &Runtime{client: client, journal: journal, deviceID: session.DeviceID}
 	if profile == PlaybackProfile || profile == MonoProfile {
 		media := decoder.HTTPS{Client: &http.Client{Transport: client.http.Transport}}
-		if profile == MonoProfile {
+		if output == nil && profile == MonoProfile {
 			r.audio, err = engine.NewRemoteMono(media)
-		} else {
+		} else if output == nil {
 			r.audio, err = engine.NewRemote(media)
+		} else if profile == MonoProfile {
+			r.audio, err = engine.NewRemoteMonoWithOutput(output, media)
+		} else {
+			r.audio, err = engine.NewRemoteWithOutput(output, media)
 		}
 		if err != nil {
 			return err

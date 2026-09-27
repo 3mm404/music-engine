@@ -339,5 +339,9 @@ func (r *Router) Close() error {
 		return nil
 	}
 	output.Pause()
-	return output.Err()
+	var closeErr error
+	if closer, ok := r.backend.(interface{ Close() error }); ok {
+		closeErr = closer.Close()
+	}
+	return errors.Join(output.Err(), closeErr)
 }

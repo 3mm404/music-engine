@@ -114,6 +114,9 @@ func (r *Runtime) execute(cmd Command) Result {
 		return failed("config_revision_mismatch", "Revisión distinta de la aplicada")
 	}
 	if r.audio != nil {
+		if failure := validateSongSelection(cmd, zone); failure != nil {
+			return failed(failure.Code, failure.Message)
+		}
 		return r.executeAudio(cmd, zone)
 	}
 	if cmd.Action != "stop" {

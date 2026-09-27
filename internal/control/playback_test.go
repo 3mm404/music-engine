@@ -25,6 +25,50 @@ func audioConfig(raw string, data []byte) Config {
 	return c
 }
 
+func TestSpecificSongSelectionAndInvalidSelectionPreservesPending(t *testing.T) {
+	s := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		<-req.Context().Done()
+	}))
+	defer s.Close()
+	r := audioRuntime(t, s)
+	c := audioConfig(s.URL+"/first", nil)
+	second := c.Zones[0].Playlist.Songs[0]
+	second.ID, second.URL = "second", s.URL+"/second"
+	c.Zones[0].Playlist.Songs = append(c.Zones[0].Playlist.Songs, second)
+	if err := r.apply(c); err != nil {
+		t.Fatal(err)
+	}
+	cmd := Command{ID: "specific", Sequence: 1, ZoneID: "10", Revision: 1, Action: "play", SongID: &second.ID, ExpiresAt: time.Now().Add(time.Minute)}
+	if result := r.execute(cmd); result.Outcome != "pending" {
+		t.Fatalf("specific play: %+v", result)
+	}
+	if got := r.report().Zones[0]; got.SongID == nil || *got.SongID != "second" || got.State != "loading" {
+		t.Fatalf("wrong selection: %+v", got)
+	}
+	foreign := "foreign"
+	bad := cmd
+	bad.ID, bad.SongID = "invalid", &foreign
+	if err := r.supersede(bad); err != nil {
+		t.Fatal(err)
+	}
+	if result := r.execute(bad); result.Error == nil || result.Error.Code != "song_not_assigned" {
+		t.Fatalf("invalid selection accepted: %+v", result)
+	}
+	if r.pending[cmd.ID] == nil || r.selected["10"] != 1 {
+		t.Fatal("invalid command replaced valid pending selection")
+	}
+	bad.Action = "pause"
+	if result := r.execute(bad); result.Error == nil || result.Error.Code != "invalid_song" {
+		t.Fatalf("song_id accepted for pause: %+v", result)
+	}
+	cmd.ID, cmd.Action, cmd.SongID = "next", "next", nil
+	r.execute(cmd)
+	if r.selected["10"] != 0 {
+		t.Fatal("next did not advance from specifically selected song")
+	}
+	r.audio.Close()
+}
+
 func audioRuntime(t *testing.T, s *httptest.Server) *Runtime {
 	t.Helper()
 	c, _ := NewClient(s.URL, "secret")

@@ -64,6 +64,7 @@ type Command struct {
 	ZoneID    string    `json:"zone_id"`
 	Revision  int64     `json:"config_revision"`
 	Action    string    `json:"action"`
+	SongID    *string   `json:"song_id,omitempty"`
 	ExpiresAt time.Time `json:"expires_at"`
 }
 

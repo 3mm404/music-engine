@@ -129,6 +129,23 @@ func (r *Runtime) applyAudio(c Config) error {
 	return nil
 }
 
+func validateSongSelection(cmd Command, z *Zone) *Failure {
+	if cmd.SongID == nil {
+		return nil
+	}
+	if cmd.Action != "play" {
+		return &Failure{"invalid_song", "Solo play admite song_id"}
+	}
+	if z.Playlist != nil {
+		for _, song := range z.Playlist.Songs {
+			if song.ID == *cmd.SongID {
+				return nil
+			}
+		}
+	}
+	return &Failure{"song_not_assigned", "Cancion fuera de la playlist de la zona"}
+}
+
 func (r *Runtime) executeAudio(cmd Command, z *Zone) Result {
 	p, _ := r.audio.Zone(z.ID)
 	var err error
@@ -138,6 +155,14 @@ func (r *Runtime) executeAudio(cmd Command, z *Zone) Result {
 			return failed("empty_playlist", "La playlist esta vacia")
 		}
 		i := r.selected[z.ID]
+		if cmd.SongID != nil {
+			for index, song := range z.Playlist.Songs {
+				if song.ID == *cmd.SongID {
+					i = index
+					break
+				}
+			}
+		}
 		if cmd.Action == "next" {
 			i = (i + 1) % len(z.Playlist.Songs)
 		}
@@ -176,6 +201,11 @@ func (r *Runtime) supersede(cmd Command) error {
 	}
 	if cmd.Action != "play" && cmd.Action != "next" && cmd.Action != "previous" && cmd.Action != "stop" {
 		return nil
+	}
+	for i := range r.config.Zones {
+		if r.config.Zones[i].ID == cmd.ZoneID && validateSongSelection(cmd, &r.config.Zones[i]) != nil {
+			return nil
+		}
 	}
 	for id, pending := range r.pending {
 		if pending.command.ZoneID != cmd.ZoneID {

@@ -148,6 +148,11 @@ func TestLaravelAudioEndToEnd(t *testing.T) {
 			waitFor("playing")
 			call("command", "previous")
 			waitFor("playing")
+			call("command", "play", "2")
+			waitFor("playing")
+			if status := call("status"); status["song"] != "2" {
+				t.Fatalf("specific song not reported: %v", status)
+			}
 			call("command", "stop")
 			waitFor("stopped")
 			t.Logf("Laravel + signed HTTPS + agent + Oto verified in %s mode", mode)
@@ -170,20 +175,22 @@ if ($argv[1] === 'init') {
     $playlist = Playlist::create(['business_id'=>$engine->business_id,'name'=>'Integration']);
     $song = Song::create(['title'=>'Fixture','file_path'=>'songs/demo.mp3']);
     $playlist->songs()->attach($song,['position'=>1]);
+    $second = Song::create(['title'=>'Second','file_path'=>'songs/demo.mp3']);
+    $playlist->songs()->attach($second,['position'=>2]);
     Zone::create(['business_id'=>$engine->business_id,'engine_id'=>$engine->id,'playlist_id'=>$playlist->id,'name'=>'A','volume'=>10]);
     echo json_encode(['token'=>$token]);
 } else {
     $engine = Engine::firstOrFail();
     $zone = $engine->zones()->firstOrFail();
     if ($argv[1] === 'command') {
-        $command = app(EngineConfiguration::class)->enqueue($engine,(string)$zone->id,$argv[2]);
+        $command = app(EngineConfiguration::class)->enqueue($engine,(string)$zone->id,$argv[2],$argv[3] ?? null);
         echo json_encode(['id'=>$command->id]);
     } elseif ($argv[1] === 'volume') {
         $zone->update(['volume'=>(int)$argv[2]]);
         echo '{}';
     } else {
         $state = $engine->observed_state['zones'][0] ?? [];
-        echo json_encode(['state'=>$state['state'] ?? null,'mode'=>$state['channel_mode'] ?? null,'volume'=>$state['volume'] ?? null,
+        echo json_encode(['state'=>$state['state'] ?? null,'song'=>$state['song_id'] ?? null,'mode'=>$state['channel_mode'] ?? null,'volume'=>$state['volume'] ?? null,
             'outcome'=>$engine->latestCommand?->result['outcome'] ?? null]);
     }
 }

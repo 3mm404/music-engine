@@ -130,11 +130,6 @@ func ListDrivers() ([]DriverInfo, error) {
 	return out, nil
 }
 
-// Processor is called from the driver's audio thread once per buffer.
-// in and out hold one slice per active channel, each of the buffer length.
-// It must not block or allocate heavily.
-type Processor func(in, out [][]float32)
-
 type bufferInfo struct {
 	IsInput    int32
 	ChannelNum int32

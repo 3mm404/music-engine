@@ -20,6 +20,8 @@ const (
 	defaultRingBlocks = 8
 )
 
+type Processor func(in, out [][]float32)
+
 type Config struct {
 	DriverName string
 	SampleRate int

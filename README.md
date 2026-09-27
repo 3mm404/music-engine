@@ -4,7 +4,7 @@ El engine administra un `Player` independiente por zona. La consola arranca con 
 
 ## Agente conectado a Laravel (objetivo 05)
 
-`cmd/agent` 0.5.0 integra configuración HTTP/Reverb, URLs firmadas, audio y reportes. Parte detenido; las órdenes se envían desde el panel Engines del backend.
+`cmd/agent` 0.6.0 integra configuración HTTP/Reverb, URLs firmadas, audio y reportes. Parte detenido; el panel Zonas permite seleccionar canción, pausar, reanudar, detener, siguiente/anterior y ajustar volumen y playlist. Engines conserva sus controles anteriores.
 
 ```powershell
 $env:ENGINE_SERVER = 'https://tu-servidor'
@@ -22,7 +22,13 @@ Play/Next/Previous quedan pendientes mientras se carga. Stop y cambios posterior
 
 `ENGINE_PROFILE=configuration_only` mantiene el modo anterior sin audio. Para una CA privada, `ENGINE_CA_FILE` añade certificados PEM a la confianza del sistema sin desactivar TLS. El backend debe servir HTTPS, configurar `ENGINE_MEDIA_URL` y usar audio privado. Los archivos públicos antiguos se importan explícitamente con `php artisan engine:import-audio`; no se migran automáticamente.
 
-Consulta el [cierre del objetivo 05](../utrack-fly/objetivos/05-audio-https-y-buffer.md) para preparación, contrato, pruebas y límites. El objetivo 06 será reproducción continua y preparación de la próxima canción.
+Consulta el [objetivo 06: control desde Laravel](../utrack-fly/objetivos/06-control-completo-desde-laravel.md) y el [cierre del objetivo 05](../utrack-fly/objetivos/05-audio-https-y-buffer.md). El usuario redefinió el 06 como control completo por zonas; reproducción continua y prefetch quedan pendientes de otro objetivo.
+
+### Instalación local conectada
+
+La instalación habitual usa `https://utrack-fly.test` con certificado confiable de Herd. `./start-local.ps1` inicia el agente con `engine-state/connection.json` (server, token, mode), ignorado por Git. No compartas ese archivo. El script no instala un servicio ni arranca automáticamente con Windows; no ejecutes dos agentes con la misma credencial. El diario conserva su bloqueo exclusivo y rechaza una segunda instancia.
+
+El campo opcional `song_id` en una orden `play` selecciona una canción de la playlist actual; `null`/ausente conserva el reinicio de la selección actual. Next/Previous continúan desde esa selección. Laravel requiere engine >= 0.6.0 para enviar canción específica; un ID ajeno falla sin sustituir una carga válida. Los resultados y la configuración aplicada aparecen por zona en el panel. Un plazo vencido sin resultado no implica éxito ni permite afirmar que el audio nunca llegó a ejecutarse.
 
 ## Ejecutar
 

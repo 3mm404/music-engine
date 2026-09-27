@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	"music-engine/internal/audio/backend"
 	"music-engine/internal/console"
 	"music-engine/internal/engine"
 )
@@ -40,7 +41,14 @@ func run() (result error) {
 			return err
 		}
 	}
-	m, err := engine.New([]engine.ZoneConfig{{ID: "A", Tracks: tracks}, {ID: "B", Tracks: tracksB}})
+	output, err := backend.FromEnvironment()
+	if err != nil {
+		return err
+	}
+	m, err := engine.NewWithOutput(output, []engine.ZoneConfig{
+		{ID: "A", Tracks: tracks, OutputChannels: []int{1, 2}},
+		{ID: "B", Tracks: tracksB, OutputChannels: []int{3, 4}},
+	})
 	if err != nil {
 		return err
 	}

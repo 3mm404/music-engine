@@ -43,7 +43,7 @@ func main() {
 	if profile == control.PlaybackProfile || profile == control.MonoProfile {
 		backendName := strings.ToLower(strings.TrimSpace(os.Getenv("ENGINE_AUDIO_BACKEND")))
 		if backendName == "" {
-			backendName = "oto"
+			backendName = "asio"
 		}
 		log.Printf("Audio backend: %s", strings.ToUpper(backendName))
 		if backendName == "asio" {

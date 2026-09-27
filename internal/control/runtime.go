@@ -134,6 +134,9 @@ func (r *Runtime) cycle(ctx context.Context) error {
 	applyErr := r.apply(config)
 	if applyErr != nil {
 		r.mu.Lock()
+		if r.configError == nil || r.configError.Revision != config.Revision || r.configError.Message != applyErr.Error() {
+			log.Printf("Configuracion de audio rechazada (revision %d): %v", config.Revision, applyErr)
+		}
 		r.configError = &ConfigError{config.Revision, "unsupported_configuration", applyErr.Error()}
 		r.mu.Unlock()
 	}

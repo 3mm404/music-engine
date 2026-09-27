@@ -1,26 +1,24 @@
 # Objetivo 09 — Backend ASIO real
 
-**Estado: implementado por software; validación física pendiente.** Se añadió `internal/audio/asio.Output` compatible con `audio.Output`. Oto sigue siendo el backend predeterminado. El backend ASIO abre un solo driver por proceso, recibe PCM signed int16 little-endian intercalado del router y convierte a las salidas Float32 planar que solicita el callback host.
+**Estado: stream real ASIO/DVS validado el 27-09-2026; recepción en red Dante/bocinas pendiente.** `internal/audio/asio.Output` es compatible con `audio.Output`. ASIO es el backend predeterminado de ambos ejecutables. El backend abre un solo driver por proceso, recibe PCM signed int16 little-endian intercalado del router y convierte a las salidas Float32 planar que solicita el callback host.
 
-No se modificaron Laravel, Filament, WebSocket, autenticación ni el protocolo. Player, Manager y Mixer conservan sus responsabilidades; el Engine selecciona el backend al arrancar.
+Player, Manager, Mixer, WebSocket, autenticación y protocolo se conservaron. Fue necesario corregir dos puntos concretos de Laravel: `EngineConfiguration` asignaba `[1,2]` a todas las zonas y `EngineHeartbeatRequest` rechazaba canales superiores a 2. Ahora la instantánea asigna canales consecutivos por orden de ID (pares estéreo o un canal mono) y el heartbeat admite canales 1–64, conservando la comprobación contra la instantánea. Esta asignación es ordinal: retirar zonas o cambiar el perfil puede cambiar los canales; revisar el ruteo y reiniciar el Engine si cambia la cantidad total de canales abiertos.
 
 ## Cómo seleccionar el backend
 
-Oto sigue siendo el valor por defecto, también cuando `ENGINE_AUDIO_BACKEND` no se define:
+ASIO es el valor por defecto cuando `ENGINE_AUDIO_BACKEND` no se define. Sin driver configurado devuelve error; nunca cae a Oto. Oto permanece como compatibilidad explícita en la factoría. El lanzador local fuerza ASIO:
 
 ```powershell
-$env:ENGINE_AUDIO_BACKEND = 'oto'
 .\start-local.ps1
 ```
 
-Para ASIO, define las variables en la misma sesión PowerShell antes de iniciar el agente:
+El lanzador usa estos valores si no hay ajustes ASIO definidos; la cantidad de canales se deduce del Router:
 
 ```powershell
 $env:ENGINE_AUDIO_BACKEND = 'asio'
 $env:ENGINE_ASIO_DRIVER = 'Dante Virtual Soundcard (x64)'
-$env:ENGINE_ASIO_SAMPLE_RATE = '44100'
+$env:ENGINE_ASIO_SAMPLE_RATE = '48000'
 $env:ENGINE_ASIO_BUFFER_SIZE = '256'
-$env:ENGINE_ASIO_CHANNELS = '8'
 .\start-local.ps1
 ```
 
@@ -35,7 +33,7 @@ go build -o bin/agent.exe ./cmd/agent
 
 | Variable | Obligatoria | Comportamiento |
 |---|---:|---|
-| `ENGINE_AUDIO_BACKEND` | No | `oto` por defecto; admite `oto` o `asio`. |
+| `ENGINE_AUDIO_BACKEND` | No | `asio` por defecto; admite `oto` solo explícitamente. `start-local.ps1` fuerza `asio`. |
 | `ENGINE_ASIO_DRIVER` | Para ASIO | Nombre exacto del driver que ASIO registra en Windows. No hay driver predeterminado. |
 | `ENGINE_ASIO_SAMPLE_RATE` | No | Frecuencia del dispositivo. Vacía usa la frecuencia PCM de entrada. Si difiere, el backend remuestrea dentro de su productor. |
 | `ENGINE_ASIO_BUFFER_SIZE` | No | Tamaño en frames, validado contra límites y granularidad del driver. Vacío usa el tamaño preferido que reporta ASIO. |
@@ -66,6 +64,24 @@ Al iniciar, `cmd/agent` registra el backend elegido y la configuración ASIO sol
 
 ## Estado físico y siguiente etapa
 
-La implementación por software está disponible y DVS pudo inicializarse durante la prueba aislada. Todavía falta probar el stream real del Engine con el driver DVS abierto, comprobar que callback y ring reciben PCM y verificar físicamente un tono en las salidas DVS CH1–2. Si una ejecución previa del agente reporta fallo, conservar el mensaje nuevo `ASIO driver initialized: no` y el error asociado; los logs persistentes antiguos no reflejan necesariamente esa ejecución.
+La sesión del 27-09-2026 identificó `zone_not_assigned` en el diario: las tres zonas se rechazaban antes de abrir ASIO por compartir `[1,2]`. Tras la corrección, el agente aplicó revisión 12 y las tres órdenes Play de Laravel terminaron en `playing`, sin errores de configuración o zona. La descarga HTTPS y el decoder entregaron PCM a 44100 Hz; ASIO abrió DVS a 48000 Hz y buffer 256 con seis salidas. A los diez segundos consumió 480000 frames, con cero underruns y overflows.
 
-Dante/Q-SYS no se configuró ni validó. Una vez que DVS pueda abrirse y se verifique audio multicanal real, la integración/ruteo Dante hacia Q-SYS corresponde al objetivo físico posterior.
+| Zona | output.channels (1-based) | Índices ASIO (0-based) | DVS TX esperado |
+|---|---|---|---|
+| 2 / Zona de Albercas | 1, 2 | 0, 1 | 1, 2 |
+| 3 / Salon POLO | 3, 4 | 2, 3 | 3, 4 |
+| 4 / SDFSDF | 5, 6 | 4, 5 | 5, 6 |
+
+La prueba optativa `TestRealDVSStreamingOptional` envía un tono de 440 Hz a -30 dBFS durante diez segundos a través del Router. Abrió ocho canales y comprobó 479200 muestras no silenciosas en cada canal 1–2 y cero en 3–8, 1878 callbacks, 480000 frames consumidos y cero underruns/overflows. Un ensayo anterior registró un underrun inicial; vigilar los incrementos durante reproducción prolongada. Los contadores `nonzero_samples_per_channel` son acumulados desde la apertura: su incremento demuestra señal, no recepción remota.
+
+```powershell
+$env:CGO_ENABLED = '0'
+# Ejecutar solo con el agente detenido, para liberar el driver.
+$env:MUSIC_ENGINE_ASIO_STREAM_TEST = '1'
+go test -v -count=1 -timeout 30s ./internal/audio/asio -run '^TestRealDVSStreamingOptional$'
+Remove-Item Env:MUSIC_ENGINE_ASIO_STREAM_TEST
+```
+
+Logs locales de la validación: `engine-state/asio-validation.stderr.log` y `engine-state/asio-signal.stderr.log`. No compartir `connection.json`. Se reconstruyó `bin/agent.exe`, pasaron `go test -count=1 ./...`, `go vet ./...`, 31 pruebas Laravel de audio/API y Pint.
+
+Dante/Q-SYS no se configuró ni validó. El adaptador Realtek Ethernet está conectado a 100 Mbps; también existe un adaptador virtual VirtualBox. Falta comprobar en DVS la interfaz seleccionada y en Dante Controller el reloj, los TX y la recepción. La apertura automatizada del panel DVS agotó el tiempo de autorización. Los contadores prueban entrega al callback del driver, no paquetes Dante ni sonido en bocinas. El siguiente paso físico es comprobar señal en un receptor y después establecer las suscripciones TX → RX correspondientes.

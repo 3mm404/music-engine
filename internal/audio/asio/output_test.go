@@ -94,6 +94,11 @@ func TestOutputValidatesDeviceChannelsAndStartsOneMultichannelStream(t *testing.
 		t.Fatal("finite source should be stopped after queued frames drain")
 	}
 	diagnostics := streamHandle.(*stream).Diagnostics()
+	for channel, want := range []uint64{4, 4, 0, 0} {
+		if diagnostics.NonzeroSamples[channel] != want {
+			t.Fatalf("signal count channel %d = %d, want %d", channel, diagnostics.NonzeroSamples[channel], want)
+		}
+	}
 	if diagnostics.ProducerFrames != 4 || diagnostics.CallbackCalls != 1 || diagnostics.CallbackFrames != 4 || diagnostics.ConsumedFrames != 4 {
 		t.Fatalf("frame diagnostics = %+v", diagnostics)
 	}

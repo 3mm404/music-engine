@@ -1,5 +1,7 @@
 # Go Music Engine: reproducción multizona
 
+**Ruta principal actual: ASIO → Dante Virtual Soundcard.** Consulta el [Objetivo 09](docs/objetivos/09-backend-asio-real.md) para el arranque y la validación actual. `start-local.ps1` fuerza ASIO con DVS x64, 48000 Hz y buffer 256; no existe fallback automático a Oto. Ambos ejecutables seleccionan ASIO por defecto y requieren `ENGINE_ASIO_DRIVER`. La consola enruta A a 1–2 y B a 3–4. Las referencias a Oto y salida compartida en las etapas anteriores de este documento son históricas.
+
 El engine administra un `Player` independiente por zona. La consola arranca con **A y B**; el agente obtiene sus zonas desde Laravel. Cada una conserva su canción, volumen y estado. Pausar, detener o cambiar una zona no interrumpe las demás.
 
 ## Agente conectado a Laravel (objetivo 05)

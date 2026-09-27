@@ -250,6 +250,7 @@ type stream struct {
 	callbackFrames atomic.Uint64
 	consumedFrames atomic.Uint64
 	producerFrames atomic.Uint64
+	nonzeroSamples [maxChannels]atomic.Uint64
 }
 
 func (s *stream) Play()  { s.active.Store(true) }
@@ -295,6 +296,15 @@ func (s *stream) callback(_ [][]float32, outputs [][]float32) {
 	}
 	consumed, underrun := s.ring.ReadPlanarCount(outputs, gain)
 	s.consumedFrames.Add(uint64(consumed))
+	for channel, samples := range outputs {
+		var nonzero uint64
+		for _, sample := range samples {
+			if sample != 0 {
+				nonzero++
+			}
+		}
+		s.nonzeroSamples[channel].Add(nonzero)
+	}
 	if underrun {
 		s.underruns.Add(1)
 	}
@@ -372,9 +382,14 @@ type StreamDiagnostics struct {
 	UnderrunCalls  uint64
 	OverflowFrames uint64
 	BufferedFrames int
+	NonzeroSamples []uint64
 }
 
 func (s *stream) Diagnostics() StreamDiagnostics {
+	nonzero := make([]uint64, s.channels)
+	for channel := range nonzero {
+		nonzero[channel] = s.nonzeroSamples[channel].Load()
+	}
 	return StreamDiagnostics{
 		Driver: s.driverName, InputRate: s.inputRate, OutputRate: s.outputRate,
 		InputChannels: s.inputChannels, OutputChannels: s.channels, BufferSize: s.bufferSize,
@@ -382,6 +397,7 @@ func (s *stream) Diagnostics() StreamDiagnostics {
 		CallbackFrames: s.callbackFrames.Load(), ConsumedFrames: s.consumedFrames.Load(),
 		UnderrunCalls: s.underruns.Load(), OverflowFrames: s.ring.OverflowFrames(),
 		BufferedFrames: s.ring.Available(),
+		NonzeroSamples: nonzero,
 	}
 }
 
@@ -394,10 +410,10 @@ func (s *stream) report() {
 			return
 		case <-ticker.C:
 			d := s.Diagnostics()
-			log.Printf("ASIO activity: driver=%q input_rate=%d output_rate=%d input_channels=%d output_channels=%d buffer_size=%d pcm_producer_frames=%d callback_calls=%d callback_frames=%d pcm_frames_consumed=%d underrun_callbacks=%d overflow_frames=%d ring_buffered_frames=%d",
+			log.Printf("ASIO activity: driver=%q input_rate=%d output_rate=%d input_channels=%d output_channels=%d buffer_size=%d pcm_producer_frames=%d callback_calls=%d callback_frames=%d pcm_frames_consumed=%d underrun_callbacks=%d overflow_frames=%d ring_buffered_frames=%d nonzero_samples_per_channel=%v",
 				d.Driver, d.InputRate, d.OutputRate, d.InputChannels, d.OutputChannels, d.BufferSize,
 				d.ProducerFrames, d.CallbackCalls, d.CallbackFrames, d.ConsumedFrames,
-				d.UnderrunCalls, d.OverflowFrames, d.BufferedFrames)
+				d.UnderrunCalls, d.OverflowFrames, d.BufferedFrames, d.NonzeroSamples)
 		}
 	}
 }

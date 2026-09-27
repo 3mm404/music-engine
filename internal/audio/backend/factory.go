@@ -14,7 +14,10 @@ import (
 
 func FromEnvironment() (audio.Output, error) {
 	name := strings.ToLower(strings.TrimSpace(os.Getenv("ENGINE_AUDIO_BACKEND")))
-	if name == "" || name == "oto" {
+	if name == "" {
+		name = "asio"
+	}
+	if name == "oto" {
 		return oto.NewOutput(), nil
 	}
 	if name != "asio" {
@@ -31,7 +34,11 @@ func FromEnvironment() (audio.Output, error) {
 	if config.Channels, err = envInt("ENGINE_ASIO_CHANNELS"); err != nil {
 		return nil, err
 	}
-	return asio.NewOutput(config)
+	output, err := asio.NewOutput(config)
+	if err != nil {
+		return nil, err
+	}
+	return output, nil
 }
 
 func envInt(name string) (int, error) {

@@ -1,6 +1,28 @@
 # Go Music Engine: reproducción multizona
 
-El engine administra un `Player` independiente por zona. Arranca con **A y B**; `engine.New([]ZoneConfig{...})` admite más zonas. Cada una conserva su canción, lista, volumen y estado. Pausar, detener o cambiar una zona no interrumpe las demás.
+El engine administra un `Player` independiente por zona. La consola arranca con **A y B**; el agente obtiene sus zonas desde Laravel. Cada una conserva su canción, volumen y estado. Pausar, detener o cambiar una zona no interrumpe las demás.
+
+## Agente conectado a Laravel (objetivo 05)
+
+`cmd/agent` 0.5.0 integra configuración HTTP/Reverb, URLs firmadas, audio y reportes. Parte detenido; las órdenes se envían desde el panel Engines del backend.
+
+```powershell
+$env:ENGINE_SERVER = 'https://tu-servidor'
+$env:ENGINE_TOKEN = '<credencial-del-equipo>'
+$env:ENGINE_STATE_DIR = 'engine-state'
+$env:ENGINE_CHANNEL_MODE = 'stereo' # o mono
+go run ./cmd/agent
+```
+
+El modo se elige al arrancar y aplica a todas las zonas del equipo. Estéreo conserva L/R; mono mezcla `(L+R)/2` y duplica el resultado en ambos canales. Ambos perfiles mezclan las zonas en la salida predeterminada de Windows; no asignan salidas físicas independientes. El agente admite MP3 MPEG-1 Layer III a **44100 Hz**, sin remuestreo. Laravel refleja el modo negociado en configuración y estados.
+
+Laravel entrega `audio_url` y SHA-256 del contenido. El agente valida la instantánea completa, conserva audio ante cambios de volumen/firma, detiene una zona al cambiar su playlist/contenido y elimina zonas retiradas. Una URL que devuelve 403 provoca una consulta de configuración y un único reintento con la misma canción/versión. La descarga verifica el hash antes de reproducir.
+
+Play/Next/Previous quedan pendientes mientras se carga. Stop y cambios posteriores pueden cancelar esa carga; no se confirma éxito solo por aceptarla. Se conserva el registro durable de órdenes y la reentrega sin repetir acciones. Heartbeat informa carga, recuperación, reproducción, pausa, parada y errores; el panel de zonas muestra canción y modo. No hay autoplay ni avance automático.
+
+`ENGINE_PROFILE=configuration_only` mantiene el modo anterior sin audio. Para una CA privada, `ENGINE_CA_FILE` añade certificados PEM a la confianza del sistema sin desactivar TLS. El backend debe servir HTTPS, configurar `ENGINE_MEDIA_URL` y usar audio privado. Los archivos públicos antiguos se importan explícitamente con `php artisan engine:import-audio`; no se migran automáticamente.
+
+Consulta el [cierre del objetivo 05](../utrack-fly/objetivos/05-audio-https-y-buffer.md) para preparación, contrato, pruebas y límites. El objetivo 06 será reproducción continua y preparación de la próxima canción.
 
 ## Ejecutar
 
@@ -73,7 +95,7 @@ if err := a.Play("music/demo.mp3"); err != nil { return err }
 <-ctx.Done()
 ```
 
-Los IDs son únicos, no vacíos y sensibles a mayúsculas. Las listas y los IDs retornados son copias. Las operaciones de cada zona admiten concurrencia. `Close` es idempotente, espera al monitor, detiene todas las zonas y rechaza nuevas operaciones sobre handles retenidos con `engine.ErrClosed`. Las zonas se definen al construir el administrador; no se agregan ni eliminan en caliente.
+Los IDs son únicos, no vacíos y sensibles a mayúsculas. Las listas y los IDs retornados son copias. Las operaciones de cada zona admiten concurrencia. `Close` es idempotente, espera al monitor, detiene todas las zonas y rechaza nuevas operaciones sobre handles retenidos con `engine.ErrClosed`. `Reconfigure` actualiza la pertenencia de zonas y conserva los reproductores de IDs existentes. El agente gestiona selección y cambios de playlist desde su configuración.
 
 - `cmd/engine/main.go`: crea A/B, inicia pistas y elige consola o modo headless.
 - `internal/engine/manager.go`: propiedad, búsqueda por ID, supervisión y cierre de N players.
@@ -82,13 +104,13 @@ Los IDs son únicos, no vacíos y sensibles a mayúsculas. Las listas y los IDs 
 - `internal/player/oto.go`: streams independientes sobre contexto Oto compartido.
 - `internal/decoder/mp3.go`: MP3 a PCM estéreo int16 little-endian.
 
-`SetVolume(float64)` acepta 0 a 1. `GetState()` devuelve una copia con Status, Track, Index (base cero, -1 fuera de lista), Total, Volume y Error. El volumen inicial es 1. Una pista inválida o con frecuencia incompatible conserva la reproducción actual.
+`SetVolume(float64)` acepta 0 a 1. `GetState()` devuelve una copia con Status, Track, Index (base cero, -1 fuera de lista), Total, Volume y Error. El volumen inicial es 1. Una pista local inválida conserva la reproducción actual; una carga HTTPS detiene la anterior antes de descargar.
 
 ## Límites e integración con Laravel
 
 Las zonas son reproductores lógicos independientes y **se mezclan en la misma salida predeterminada de Windows**. Todavía no se asignan dispositivos físicos por zona. Oto usa un contexto por proceso y la frecuencia del primer MP3; todas las pistas deben tener esa frecuencia. No hay resampling. Pause/Stop pueden dejar sonar brevemente audio ya enviado al dispositivo. Un fallo del dispositivo compartido puede afectar todas las zonas.
 
-`cmd/agent` conserva el perfil **configuration_only**, con HTTP, heartbeat, Reverb y deduplicación durable. El agente aún no se conecta a la reproducción. El reproductor admite descarga HTTPS independiente, sin caché persistente. No se implementan scheduler ni Dante. Consulta el [contrato API v1](../utrack-fly/objetivos/01-contrato-laravel-engine-api-v1.md), el [objetivo 02](../utrack-fly/objetivos/02-conexion-y-sincronizacion-del-engine.md) y el [cierre WebSocket](../utrack-fly/objetivos/03-sincronizacion-mediante-websocket.md). El laboratorio WASAPI se conserva como documentación histórica en `docs/`.
+`cmd/agent` usa los perfiles `shared_stereo_mp3` / `shared_mono_mp3`, conservando `configuration_only` como opción. No se implementan scheduler ni Dante. Consulta el [contrato API v1.1](../utrack-fly/objetivos/01-contrato-laravel-engine-api-v1.md). El laboratorio WASAPI se conserva como documentación histórica en `docs/`.
 
 ## Verificación
 
@@ -116,6 +138,6 @@ Las pruebas cubren IDs inválidos y desconocidos, tercera zona, copias de IDs, v
 - Cambio de canción, navegación, Stop y Close cancelan descarga y backoff. Los resultados obsoletos no inician audio. Cada zona conserva volumen y transporte independientes.
 - Solo MP3; la frecuencia debe coincidir con el contexto Oto, definido por la primera pista. No hay remuestreo.
 
-El servidor debe entregar URLs autorizadas. Esta entrada no emite ni renueva firmas: un 403 queda en ERROR y requiere Play con una URL renovada. El enlace automático con config, la renovación tras 403 del contrato y las órdenes del agente siguen pendientes; `cmd/agent` conserva `configuration_only`. Se verifica con HTTPS local y Oto real, no con un servidor Laravel desplegado.
+La consola independiente no consulta configuración: un 403 requiere Play con otra URL. El agente conectado sí obtiene la firma renovada mediante Laravel. Se verificó la cadena completa con Laravel, HTTPS, el binario del agente y Oto reales en un entorno local aislado, tanto mono como estéreo; no se desplegó un servidor de producción.
 
 Ejemplo: `go run ./cmd/engine -file "https://servidor/audio/1?signature=..."`.

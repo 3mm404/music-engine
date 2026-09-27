@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net/url"
 	"path/filepath"
@@ -19,20 +20,35 @@ var ErrNoTrack = errors.New("no hay un archivo cargado; llama a Play primero")
 
 // Player conserva el stream mientras Oto lo lee. Sus metodos admiten concurrencia.
 type Player struct {
-	mu         sync.Mutex
-	stream     *decoder.Stream
-	audio      *audioOutput
-	paused     bool
-	tracks     []string
-	index      int
-	current    string
-	volume     float64
-	lastError  error
-	remote     decoder.HTTPS
-	cancel     context.CancelFunc
-	generation uint64
-	loading    string
-	jobs       sync.WaitGroup
+	mu           sync.Mutex
+	stream       *decoder.Stream
+	audio        *audioOutput
+	paused       bool
+	tracks       []string
+	index        int
+	current      string
+	volume       float64
+	lastError    error
+	remote       decoder.HTTPS
+	cancel       context.CancelFunc
+	generation   uint64
+	loading      string
+	jobs         sync.WaitGroup
+	expectedRate int
+	mono         bool
+}
+
+// NewRemote fixes the rate promised in configuration and permits a trusted HTTP transport.
+func NewRemote(rate int, source decoder.HTTPS) *Player {
+	p := New()
+	p.expectedRate, p.remote = rate, source
+	return p
+}
+
+func NewRemoteMono(rate int, source decoder.HTTPS) *Player {
+	p := NewRemote(rate, source)
+	p.mono = true
+	return p
 }
 
 // New copia una lista opcional. El orden recibido define Next y Previous.
@@ -49,6 +65,15 @@ func (p *Player) Play(path string) error {
 	return p.playLocked(path)
 }
 
+func (p *Player) PlayVerified(path, hash string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !decoder.ValidURL(path) {
+		return errors.New("audio requiere HTTPS")
+	}
+	return p.startRemoteLocked(path, hash)
+}
+
 func (p *Player) playLocked(path string) error {
 	if path == "" {
 		path = p.current
@@ -60,7 +85,7 @@ func (p *Player) playLocked(path string) error {
 		if !decoder.ValidURL(path) {
 			return errors.New("audio requiere HTTPS")
 		}
-		return p.startRemoteLocked(path)
+		return p.startRemoteLocked(path, "")
 	}
 	p.cancelLoadLocked()
 	source, err := decoder.Open(path)
@@ -71,7 +96,15 @@ func (p *Player) playLocked(path string) error {
 }
 
 func (p *Player) installLocked(path string, source *decoder.Stream) error {
-	audio, err := openOutput(source, source.SampleRate())
+	if p.expectedRate != 0 && source.SampleRate() != p.expectedRate {
+		source.Close()
+		return errors.New("frecuencia MP3 distinta de la configuracion")
+	}
+	var pcm io.Reader = source
+	if p.mono {
+		pcm = &monoReader{source: source}
+	}
+	audio, err := openOutput(pcm, source.SampleRate())
 	if err != nil {
 		source.Close()
 		return err
@@ -115,7 +148,7 @@ func (p *Player) cancelLoadLocked() {
 	p.loading = ""
 }
 
-func (p *Player) startRemoteLocked(path string) error {
+func (p *Player) startRemoteLocked(path, hash string) error {
 	p.cancelLoadLocked()
 	if err := p.stopLocked(); err != nil {
 		return err
@@ -139,9 +172,11 @@ func (p *Player) startRemoteLocked(path string) error {
 	}
 	results := make(chan result)
 	p.jobs.Add(1)
+	sourceOptions := p.remote
+	sourceOptions.SHA256 = hash
 	go func() {
 		defer p.jobs.Done()
-		source, err := p.remote.Open(ctx, path, func() { events <- "RECOVERING" })
+		source, err := sourceOptions.Open(ctx, path, func() { events <- "RECOVERING" })
 		select {
 		case results <- result{source, err}:
 		case <-ctx.Done():
@@ -215,6 +250,7 @@ func (p *Player) Stop() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.cancelLoadLocked()
+	p.lastError = nil
 	return p.stopLocked()
 }
 

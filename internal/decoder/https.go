@@ -3,6 +3,8 @@ package decoder
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +15,10 @@ import (
 
 const MaxAudioBytes = 32 << 20
 
+type HTTPError struct{ Status int }
+
+func (e *HTTPError) Error() string { return fmt.Sprintf("descarga de audio: HTTP %d", e.Status) }
+
 // HTTPS downloads signed URLs without device credentials. Redirects are rejected
 // so authorization query parameters cannot be forwarded to another endpoint.
 type HTTPS struct {
@@ -20,6 +26,7 @@ type HTTPS struct {
 	MaxBytes int64
 	Timeout  time.Duration
 	Backoff  time.Duration
+	SHA256   string
 }
 
 func ValidURL(raw string) bool {
@@ -67,6 +74,12 @@ func (h HTTPS) Open(ctx context.Context, raw string, recovering func()) (*Stream
 		}
 		data, retry, err := download(ctx, &client, raw, limit, timeout)
 		if err == nil {
+			if h.SHA256 != "" {
+				sum := sha256.Sum256(data)
+				if hex.EncodeToString(sum[:]) != h.SHA256 {
+					return nil, errors.New("contenido MP3 diferente de la version configurada")
+				}
+			}
 			return OpenReader(io.NopCloser(bytes.NewReader(data)))
 		}
 		last = err
@@ -88,7 +101,7 @@ func download(ctx context.Context, client *http.Client, raw string, limit int64,
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, resp.StatusCode == 408 || resp.StatusCode == 429 || resp.StatusCode >= 500, fmt.Errorf("descarga de audio: HTTP %d", resp.StatusCode)
+		return nil, resp.StatusCode == 408 || resp.StatusCode == 429 || resp.StatusCode >= 500, &HTTPError{resp.StatusCode}
 	}
 	if resp.ContentLength > limit {
 		return nil, false, errors.New("audio excede el limite de memoria")

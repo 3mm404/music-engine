@@ -6,13 +6,16 @@ import (
 	"fmt"
 	"log"
 	"math/rand/v2"
+	"music-engine/internal/decoder"
+	"music-engine/internal/engine"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
 )
 
-// Runtime maintains configuration state only. It never starts an audio backend.
+// Runtime synchronizes configuration, durable commands and observed zone state.
 type Runtime struct {
 	client      *Client
 	journal     *Journal
@@ -21,6 +24,9 @@ type Runtime struct {
 	config      Config
 	configError *ConfigError
 	sequence    int64
+	audio       *engine.Manager
+	selected    map[string]int
+	pending     map[string]*pendingPlayback
 }
 
 func (r *Runtime) apply(c Config) error {
@@ -32,7 +38,7 @@ func (r *Runtime) apply(c Config) error {
 		if z.ID == "" || seen[z.ID] || z.Volume < 0 || z.Volume > 100 || (z.ChannelMode != "mono" && z.ChannelMode != "stereo") {
 			return errors.New("zona inválida")
 		}
-		if z.Output != nil {
+		if r.audio == nil && z.Output != nil {
 			return errors.New("esta etapa no admite salidas de audio; configure output=null")
 		}
 		if z.Playlist != nil && (z.Playlist.ID == "" || z.Playlist.Songs == nil) {
@@ -40,10 +46,26 @@ func (r *Runtime) apply(c Config) error {
 		}
 		seen[z.ID] = true
 	}
+	if r.audio != nil {
+		if r.client != nil && r.client.profile != "" && c.Profile != r.client.profile {
+			return errors.New("perfil diferente al negociado")
+		}
+		if err := validateAudio(c); err != nil {
+			return err
+		}
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if c.Revision < r.config.Revision {
 		return errors.New("revisión regresiva")
+	}
+	if r.audio != nil {
+		if c.Revision == r.config.Revision && !sameSnapshot(c, r.config) {
+			return errors.New("contenido diferente para la misma revision")
+		}
+		if err := r.applyAudio(c); err != nil {
+			return err
+		}
 	}
 	r.config = c
 	r.configError = nil
@@ -59,6 +81,9 @@ func (r *Runtime) report() Report {
 		state := ZoneState{ZoneID: z.ID, State: "stopped", Volume: z.Volume, ChannelMode: &z.ChannelMode}
 		if z.Playlist != nil {
 			state.PlaylistID = &z.Playlist.ID
+		}
+		if r.audio != nil {
+			r.audioReport(z, &state)
 		}
 		report.Zones = append(report.Zones, state)
 	}
@@ -88,6 +113,9 @@ func (r *Runtime) execute(cmd Command) Result {
 	if cmd.Revision != r.config.Revision {
 		return failed("config_revision_mismatch", "Revisión distinta de la aplicada")
 	}
+	if r.audio != nil {
+		return r.executeAudio(cmd, zone)
+	}
 	if cmd.Action != "stop" {
 		return failed("unsupported_action", "Engine de configuración sin reproducción de audio")
 	}
@@ -99,10 +127,16 @@ func (r *Runtime) cycle(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err = r.apply(config); err != nil {
+	applyErr := r.apply(config)
+	if applyErr != nil {
 		r.mu.Lock()
-		r.configError = &ConfigError{config.Revision, "unsupported_configuration", err.Error()}
+		r.configError = &ConfigError{config.Revision, "unsupported_configuration", applyErr.Error()}
 		r.mu.Unlock()
+	}
+	if r.audio != nil {
+		if err := r.finishPending(ctx, applyErr == nil); err != nil {
+			return err
+		}
 	}
 	commands, err := r.client.Commands(ctx)
 	if err != nil {
@@ -116,15 +150,29 @@ func (r *Runtime) cycle(ctx context.Context) error {
 		previous = cmd.Sequence
 		result, seen := r.journal.results[cmd.ID]
 		if !seen {
+			if r.audio != nil {
+				if err := r.supersede(cmd); err != nil {
+					return err
+				}
+			}
 			if err := r.journal.Record(cmd.ID, nil); err != nil {
 				return fmt.Errorf("persistir inicio: %w", err)
 			}
 			executed := r.execute(cmd)
+			if executed.Outcome == "pending" {
+				continue
+			}
 			result = &executed
 			if err := r.journal.Record(cmd.ID, result); err != nil {
 				return fmt.Errorf("persistir resultado: %w", err)
 			}
 		} else if result == nil {
+			r.mu.Lock()
+			pending := r.pending[cmd.ID] != nil
+			r.mu.Unlock()
+			if pending {
+				continue
+			}
 			unknown := failed("execution_unknown", "El proceso terminó sin persistir el resultado; no se repite la acción")
 			result = &unknown
 			if err := r.journal.Record(cmd.ID, result); err != nil {
@@ -163,10 +211,18 @@ func delay(attempt int, err error) time.Duration {
 }
 
 func Run(ctx context.Context, server, token, version, stateDir string) error {
+	return RunProfile(ctx, server, token, version, stateDir, "configuration_only")
+}
+
+func RunProfile(ctx context.Context, server, token, version, stateDir, profile string) error {
+	if profile != "configuration_only" && profile != PlaybackProfile && profile != MonoProfile {
+		return errors.New("ENGINE_PROFILE invalido")
+	}
 	client, err := NewClient(server, token)
 	if err != nil {
 		return err
 	}
+	client.profile = profile
 	if err := os.MkdirAll(stateDir, 0700); err != nil {
 		return err
 	}
@@ -201,6 +257,18 @@ func Run(ctx context.Context, server, token, version, stateDir string) error {
 	}
 	defer journal.Close()
 	r := &Runtime{client: client, journal: journal, deviceID: session.DeviceID}
+	if profile == PlaybackProfile || profile == MonoProfile {
+		media := decoder.HTTPS{Client: &http.Client{Transport: client.http.Transport}}
+		if profile == MonoProfile {
+			r.audio, err = engine.NewRemoteMono(media)
+		} else {
+			r.audio, err = engine.NewRemote(media)
+		}
+		if err != nil {
+			return err
+		}
+		defer r.audio.Close()
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	fatal := make(chan error, 2)
@@ -208,6 +276,41 @@ func Run(ctx context.Context, server, token, version, stateDir string) error {
 	reportNow := make(chan struct{}, 1)
 	var workers sync.WaitGroup
 	defer func() { cancel(); workers.Wait() }()
+	if r.audio != nil {
+		workers.Go(func() {
+			ticker := time.NewTicker(100 * time.Millisecond)
+			defer ticker.Stop()
+			previous := map[string]string{}
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					r.mu.Lock()
+					changed := false
+					for _, id := range r.audio.IDs() {
+						p, _ := r.audio.Zone(id)
+						status := p.GetState().Status
+						if previous[id] != status {
+							changed = true
+							previous[id] = status
+						}
+					}
+					r.mu.Unlock()
+					if changed {
+						select {
+						case wake <- struct{}{}:
+						default:
+						}
+						select {
+						case reportNow <- struct{}{}:
+						default:
+						}
+					}
+				}
+			}
+		})
+	}
 	workers.Go(func() {
 		for {
 			report := r.report()
@@ -238,7 +341,7 @@ func Run(ctx context.Context, server, token, version, stateDir string) error {
 	if session.WebSocket != nil {
 		workers.Go(func() { client.watch(ctx, *session.WebSocket, wake, fatal) })
 	}
-	log.Printf("Engine %s conectado; modo configuración sin audio", session.DeviceID)
+	log.Printf("Engine %s conectado; perfil %s", session.DeviceID, profile)
 	for attempt := 0; ; {
 		err := r.cycle(ctx)
 		if ctx.Err() != nil {

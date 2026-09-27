@@ -17,6 +17,7 @@ type WebSocketConfig struct {
 }
 
 type Config struct {
+	Profile  string `json:"profile"`
 	DeviceID string `json:"device_id"`
 	Revision int64  `json:"config_revision"`
 	Zones    []Zone `json:"zones"`
@@ -43,7 +44,18 @@ type Playlist struct {
 }
 
 type Song struct {
-	ID string `json:"song_id"`
+	ID             string      `json:"song_id"`
+	URL            string      `json:"audio_url"`
+	ContentVersion string      `json:"content_version"`
+	Format         AudioFormat `json:"format"`
+}
+
+type AudioFormat struct {
+	Container string `json:"container"`
+	Codec     string `json:"codec"`
+	Mime      string `json:"mime_type"`
+	Rate      int    `json:"sample_rate_hz"`
+	Channels  int    `json:"channels"`
 }
 
 type Command struct {

@@ -59,6 +59,34 @@ type monitoredPlayer struct {
 	polled chan struct{}
 }
 
+func TestReconfigurePreservesExistingZoneAndClosesRemovedHandle(t *testing.T) {
+	m, err := New([]ZoneConfig{{ID: "A"}, {ID: "B"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	a, _ := m.Zone("A")
+	b, _ := m.Zone("B")
+	a.SetVolume(.4)
+	if err = m.Reconfigure([]ZoneConfig{{ID: "A"}, {ID: "C"}}); err != nil {
+		t.Fatal(err)
+	}
+	retained, _ := m.Zone("A")
+	if retained != a || retained.GetState().Volume != .4 {
+		t.Fatal("replaced retained zone")
+	}
+	if !errors.Is(b.Play("missing"), ErrClosed) {
+		t.Fatal("removed handle can restart")
+	}
+	if err = m.Reconfigure([]ZoneConfig{{ID: "C"}, {ID: "C"}}); err == nil || len(m.IDs()) != 2 {
+		t.Fatal("invalid configuration partially applied")
+	}
+	m.Close()
+	if !errors.Is(m.Reconfigure(nil), ErrClosed) {
+		t.Fatal("closed manager reconfigured")
+	}
+}
+
 func (p *monitoredPlayer) GetState() player.State {
 	select {
 	case p.polled <- struct{}{}:

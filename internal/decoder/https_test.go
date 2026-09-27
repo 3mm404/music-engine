@@ -63,3 +63,12 @@ func TestHTTPSLimitsAndTimeout(t *testing.T) {
 		t.Fatal("timeout", err)
 	}
 }
+
+func TestHTTPSRejectsDifferentContentVersion(t *testing.T) {
+	s := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("replaced bytes")) }))
+	defer s.Close()
+	_, err := (HTTPS{Client: s.Client(), SHA256: strings.Repeat("0", 64)}).Open(context.Background(), s.URL, nil)
+	if err == nil || !strings.Contains(err.Error(), "version configurada") {
+		t.Fatalf("content mismatch: %v", err)
+	}
+}

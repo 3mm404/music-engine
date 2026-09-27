@@ -1,8 +1,22 @@
 # Contrato Laravel ↔ Music Engine
 
-Versión del documento: **1.0.0**, 25 de septiembre de 2026.
-Estado: **contrato de referencia; implementación parcial de conexión y configuración sin audio descrita en [Objetivo 02](02-conexion-y-sincronizacion-del-engine.md)**. El perfil `configuration_only` no implementa todavía el contrato completo de reproducción de este documento.
+Versión del documento: **1.1.0**, 26 de septiembre de 2026.
+Estado: **reproducción HTTPS implementada con los perfiles compartidos del [objetivo 05](05-audio-https-y-buffer.md)**. Se conserva `configuration_only`. El ruteo físico exclusivo del contrato base sigue sin implementarse; la extensión siguiente define las capacidades reales del engine actual.
 Este archivo es la fuente de verdad compartida. Los cambios de contrato deben revisarse junto con ambos proyectos.
+
+## Extensión implementada: salida compartida (objetivo 05)
+
+- La apertura de sesión incluye `capabilities` con exactamente uno de `configuration_only`, `shared_stereo_mp3` o `shared_mono_mp3`. El agente 0.5.0 selecciona el modo mediante `ENGINE_CHANNEL_MODE=stereo|mono` antes del arranque. La respuesta de configuración incluye `profile`.
+- Los perfiles de audio usan `output={"device_id":"default","channels":[1,2]}` en todas las zonas. Comparten y mezclan la salida predeterminada de Windows. Esta es una excepción explícita a la exclusividad de canales del contrato base, no una implementación del ruteo físico.
+- En este perfil, el engine determina el modo efectivo del equipo. `shared_mono_mp3` mezcla `(L+R)/2` y lo duplica en ambos canales; `shared_stereo_mp3` conserva L/R. Todas las zonas reportan el modo negociado. El campo histórico de modo de zona se conserva para otros perfiles.
+- Formato admitido: MP3 MPEG-1 Layer III a 44100 Hz, fuente de uno o dos canales y hasta 32 MiB por canción/zona. Sin remuestreo. `content_version` es SHA-256 hexadecimal minúsculo y se verifica antes de reproducir; duración y bitrate pueden ser null.
+- Medios privados mediante `GET /api/v1/engine/audio/{engine}/{song}` y URL temporal firmada, sin Bearer ni cabecera de sesión. Se comprueban firma/expiración, concesión vinculada a credencial/sesión vigentes, equipo habilitado, pertenencia actual y contenido. Cambiar esos permisos revoca URLs. La emisión se hace desde config; renovar la firma no altera la revisión.
+- La descarga completa es asíncrona. Los estados adicionales de heartbeat son `loading` y `recovering`; el agente informa `playing` solo cuando el audio se ha abierto. También informa `paused`, `stopped` y `error`. `position_ms` permanece null.
+- Las acciones se inician en orden de secuencia, pero una carga pendiente no bloquea otras zonas ni Stop/cambios posteriores. Una carga reemplazada por una orden válida recibe `command_superseded`. El resultado de play/next/previous se persiste al resolver la carga. La recuperación de registros `started` tras caída conserva `execution_unknown`.
+- Tras un 403 se obtiene config y se reintenta una vez la misma canción/versión; otro fallo terminal produce `audio_download_failed`. Un cambio de asignación o contenido durante la recuperación detiene la carga y no reproduce contenido antiguo.
+- El panel refleja estados, canción, modo y error. No hay avance automático ni preparación de la siguiente canción; corresponden al objetivo 06.
+
+Las secciones siguientes mantienen el contrato base. Cuando difieren en capacidad física, estados de carga o secuenciación durante descargas, prevalece esta extensión para los dos perfiles compartidos.
 
 ## 1. Responsabilidades y transporte
 

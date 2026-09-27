@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"music-engine/internal/decoder"
 	"music-engine/internal/player"
 )
 
@@ -29,9 +30,12 @@ type playback interface {
 	GetState() player.State
 }
 
-// Manager owns a fixed set of zones of any size. Close releases every player.
+// Manager owns independent zones. Reconfigure changes membership; Close releases all players.
 // Players share the Oto device, but never their track, volume or transport state.
 type Manager struct {
+	mu       sync.RWMutex
+	closed   bool
+	factory  func([]string) playback
 	zones    map[string]*Zone
 	ids      []string
 	stop     chan struct{}
@@ -44,6 +48,47 @@ func New(configs []ZoneConfig) (*Manager, error) {
 	return newManager(configs, func(tracks []string) playback { return player.New(tracks...) })
 }
 
+func NewRemote(source decoder.HTTPS) (*Manager, error) {
+	return newManager(nil, func([]string) playback { return player.NewRemote(44100, source) })
+}
+
+func NewRemoteMono(source decoder.HTTPS) (*Manager, error) {
+	return newManager(nil, func([]string) playback { return player.NewRemoteMono(44100, source) })
+}
+
+// Reconfigure changes membership, retaining every unchanged zone and its audio.
+func (m *Manager) Reconfigure(configs []ZoneConfig) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return ErrClosed
+	}
+	seen := map[string]bool{}
+	for _, c := range configs {
+		if strings.TrimSpace(c.ID) == "" || seen[c.ID] {
+			return errors.New("zona invalida")
+		}
+		seen[c.ID] = true
+	}
+	for id, z := range m.zones {
+		if !seen[id] {
+			z.mu.Lock()
+			z.closed = true
+			z.p.Stop()
+			z.mu.Unlock()
+			delete(m.zones, id)
+		}
+	}
+	m.ids = nil
+	for _, c := range configs {
+		m.ids = append(m.ids, c.ID)
+		if m.zones[c.ID] == nil {
+			m.zones[c.ID] = &Zone{p: m.factory(append([]string(nil), c.Tracks...))}
+		}
+	}
+	return nil
+}
+
 func newManager(configs []ZoneConfig, factory func([]string) playback) (*Manager, error) {
 	seen := make(map[string]bool, len(configs))
 	for _, config := range configs {
@@ -52,7 +97,7 @@ func newManager(configs []ZoneConfig, factory func([]string) playback) (*Manager
 		}
 		seen[config.ID] = true
 	}
-	m := &Manager{zones: make(map[string]*Zone, len(configs)), stop: make(chan struct{}), done: make(chan struct{})}
+	m := &Manager{factory: factory, zones: make(map[string]*Zone, len(configs)), stop: make(chan struct{}), done: make(chan struct{})}
 	for _, config := range configs {
 		m.ids = append(m.ids, config.ID)
 		m.zones[config.ID] = &Zone{p: factory(append([]string(nil), config.Tracks...))}
@@ -72,16 +117,24 @@ func (m *Manager) monitor() {
 		case <-m.stop:
 			return
 		case <-ticker.C:
+			m.mu.RLock()
 			for _, zone := range m.zones {
 				zone.GetState()
 			}
+			m.mu.RUnlock()
 		}
 	}
 }
 
-func (m *Manager) IDs() []string { return append([]string(nil), m.ids...) }
+func (m *Manager) IDs() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return append([]string(nil), m.ids...)
+}
 
 func (m *Manager) Zone(id string) (*Zone, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	z, ok := m.zones[id]
 	if !ok {
 		return nil, fmt.Errorf("zona desconocida: %q", id)
@@ -94,6 +147,9 @@ func (m *Manager) Close() error {
 	m.once.Do(func() {
 		close(m.stop)
 		<-m.done
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		m.closed = true
 		for _, id := range m.ids {
 			z := m.zones[id]
 			z.mu.Lock()
@@ -125,6 +181,16 @@ func (z *Zone) apply(fn func(playback) error) error {
 
 func (z *Zone) Play(path string) error {
 	return z.apply(func(p playback) error { return p.Play(path) })
+}
+
+func (z *Zone) PlayVerified(path, hash string) error {
+	return z.apply(func(p playback) error {
+		verified, ok := p.(interface{ PlayVerified(string, string) error })
+		if !ok {
+			return errors.New("reproductor sin verificacion de contenido")
+		}
+		return verified.PlayVerified(path, hash)
+	})
 }
 func (z *Zone) Pause() error    { return z.apply(playback.Pause) }
 func (z *Zone) Resume() error   { return z.apply(playback.Resume) }

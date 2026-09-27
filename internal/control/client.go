@@ -3,12 +3,15 @@ package control
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -19,6 +22,7 @@ type Client struct {
 	token   string
 	session string
 	http    *http.Client
+	profile string
 }
 
 type APIError struct {
@@ -41,8 +45,23 @@ func NewClient(server, token string) (*Client, error) {
 	if strings.TrimSpace(token) == "" {
 		return nil, errors.New("falta ENGINE_TOKEN")
 	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if path := os.Getenv("ENGINE_CA_FILE"); path != "" {
+		pem, err := os.ReadFile(path)
+		if err != nil {
+			return nil, errors.New("no se pudo leer ENGINE_CA_FILE")
+		}
+		roots, err := x509.SystemCertPool()
+		if err != nil {
+			roots = x509.NewCertPool()
+		}
+		if !roots.AppendCertsFromPEM(pem) {
+			return nil, errors.New("ENGINE_CA_FILE no contiene certificados PEM")
+		}
+		transport.TLSClientConfig = &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}
+	}
 	return &Client{base: strings.TrimRight(server, "/") + "/api/v1/engine", token: token,
-		http: &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
+		http: &http.Client{Transport: transport, Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
 }
 
 func (c *Client) request(ctx context.Context, method, path string, body, target any, envelope bool) error {
@@ -95,7 +114,11 @@ func (c *Client) request(ctx context.Context, method, path string, body, target 
 
 func (c *Client) Open(ctx context.Context, version string) (Session, error) {
 	var s Session
-	err := c.request(ctx, "POST", "/sessions", map[string]any{"engine_version": version, "capabilities": []string{"configuration_only"}}, &s, true)
+	profile := c.profile
+	if profile == "" {
+		profile = "configuration_only"
+	}
+	err := c.request(ctx, "POST", "/sessions", map[string]any{"engine_version": version, "capabilities": []string{profile}}, &s, true)
 	if err == nil {
 		if s.DeviceID == "" || s.SessionID == "" || s.HeartbeatSeconds < 1 || s.PollSeconds < 1 {
 			return s, errors.New("sesión inválida")

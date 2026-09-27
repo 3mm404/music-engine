@@ -8,6 +8,9 @@ import (
 	"sync"
 	"time"
 
+	"music-engine/internal/audio"
+	"music-engine/internal/audio/mixer"
+	"music-engine/internal/audio/oto"
 	"music-engine/internal/decoder"
 	"music-engine/internal/player"
 )
@@ -15,8 +18,9 @@ import (
 var ErrClosed = errors.New("el administrador de reproductores esta cerrado")
 
 type ZoneConfig struct {
-	ID     string
-	Tracks []string
+	ID             string
+	Tracks         []string
+	OutputChannels []int
 }
 
 type playback interface {
@@ -31,11 +35,12 @@ type playback interface {
 }
 
 // Manager owns independent zones. Reconfigure changes membership; Close releases all players.
-// Players share the Oto device, but never their track, volume or transport state.
+// Zones share the output backend, but never their track, volume or transport state.
 type Manager struct {
 	mu       sync.RWMutex
 	closed   bool
-	factory  func([]string) playback
+	factory  func(ZoneConfig) playback
+	router   *mixer.Router
 	zones    map[string]*Zone
 	ids      []string
 	stop     chan struct{}
@@ -45,15 +50,36 @@ type Manager struct {
 }
 
 func New(configs []ZoneConfig) (*Manager, error) {
-	return newManager(configs, func(tracks []string) playback { return player.New(tracks...) })
+	return NewWithOutput(oto.NewOutput(), configs)
+}
+
+func NewWithOutput(output audio.Output, configs []ZoneConfig) (*Manager, error) {
+	router := mixer.New(output)
+	return newManager(configs, router, func(config ZoneConfig) playback {
+		return player.NewWithOutput(router.OutputForZone(config.ID), config.Tracks...)
+	})
 }
 
 func NewRemote(source decoder.HTTPS) (*Manager, error) {
-	return newManager(nil, func([]string) playback { return player.NewRemote(44100, source) })
+	return NewRemoteWithOutput(oto.NewOutput(), source)
+}
+
+func NewRemoteWithOutput(output audio.Output, source decoder.HTTPS) (*Manager, error) {
+	router := mixer.New(output)
+	return newManager(nil, router, func(config ZoneConfig) playback {
+		return player.NewRemoteWithOutput(router.OutputForZone(config.ID), 44100, source)
+	})
 }
 
 func NewRemoteMono(source decoder.HTTPS) (*Manager, error) {
-	return newManager(nil, func([]string) playback { return player.NewRemoteMono(44100, source) })
+	return NewRemoteMonoWithOutput(oto.NewOutput(), source)
+}
+
+func NewRemoteMonoWithOutput(output audio.Output, source decoder.HTTPS) (*Manager, error) {
+	router := mixer.New(output)
+	return newManager(nil, router, func(config ZoneConfig) playback {
+		return player.NewRemoteMonoWithOutput(router.OutputForZone(config.ID), 44100, source)
+	})
 }
 
 // Reconfigure changes membership, retaining every unchanged zone and its audio.
@@ -70,6 +96,13 @@ func (m *Manager) Reconfigure(configs []ZoneConfig) error {
 		}
 		seen[c.ID] = true
 	}
+	routes, err := routesFor(configs)
+	if err != nil {
+		return err
+	}
+	if err := m.router.Configure(routes); err != nil {
+		return err
+	}
 	for id, z := range m.zones {
 		if !seen[id] {
 			z.mu.Lock()
@@ -83,13 +116,29 @@ func (m *Manager) Reconfigure(configs []ZoneConfig) error {
 	for _, c := range configs {
 		m.ids = append(m.ids, c.ID)
 		if m.zones[c.ID] == nil {
-			m.zones[c.ID] = &Zone{p: m.factory(append([]string(nil), c.Tracks...))}
+			config := c
+			config.Tracks = append([]string(nil), c.Tracks...)
+			config.OutputChannels = append([]int(nil), c.OutputChannels...)
+			m.zones[c.ID] = &Zone{p: m.factory(config)}
 		}
 	}
 	return nil
 }
 
-func newManager(configs []ZoneConfig, factory func([]string) playback) (*Manager, error) {
+func routesFor(configs []ZoneConfig) ([]mixer.Route, error) {
+	routes := make([]mixer.Route, 0, len(configs))
+	for _, config := range configs {
+		if len(config.OutputChannels) > 0 {
+			routes = append(routes, mixer.Route{ZoneID: config.ID, Channels: config.OutputChannels})
+		}
+	}
+	if len(routes) != 0 && len(routes) != len(configs) {
+		return nil, errors.New("todas las zonas deben configurar canales de salida o ninguna")
+	}
+	return routes, nil
+}
+
+func newManager(configs []ZoneConfig, router *mixer.Router, factory func(ZoneConfig) playback) (*Manager, error) {
 	seen := make(map[string]bool, len(configs))
 	for _, config := range configs {
 		if strings.TrimSpace(config.ID) == "" || seen[config.ID] {
@@ -97,10 +146,19 @@ func newManager(configs []ZoneConfig, factory func([]string) playback) (*Manager
 		}
 		seen[config.ID] = true
 	}
-	m := &Manager{factory: factory, zones: make(map[string]*Zone, len(configs)), stop: make(chan struct{}), done: make(chan struct{})}
+	routes, err := routesFor(configs)
+	if err != nil {
+		return nil, err
+	}
+	if err := router.Configure(routes); err != nil {
+		return nil, err
+	}
+	m := &Manager{factory: factory, router: router, zones: make(map[string]*Zone, len(configs)), stop: make(chan struct{}), done: make(chan struct{})}
 	for _, config := range configs {
 		m.ids = append(m.ids, config.ID)
-		m.zones[config.ID] = &Zone{p: factory(append([]string(nil), config.Tracks...))}
+		config.Tracks = append([]string(nil), config.Tracks...)
+		config.OutputChannels = append([]int(nil), config.OutputChannels...)
+		m.zones[config.ID] = &Zone{p: factory(config)}
 	}
 	go m.monitor()
 	return m, nil
@@ -158,6 +216,9 @@ func (m *Manager) Close() error {
 				m.closeErr = errors.Join(m.closeErr, fmt.Errorf("zona %s: %w", id, err))
 			}
 			z.mu.Unlock()
+		}
+		if err := m.router.Close(); err != nil {
+			m.closeErr = errors.Join(m.closeErr, err)
 		}
 	})
 	return m.closeErr

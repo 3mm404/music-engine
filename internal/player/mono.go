@@ -6,7 +6,7 @@ import (
 )
 
 // monoReader mixes each int16 stereo frame using int32 to avoid overflow, and
-// duplicates the result to both channels of the shared two-channel Oto device.
+// duplicates the result to stereo PCM for downstream routing.
 type monoReader struct {
 	source  io.Reader
 	frame   [4]byte

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"time"
@@ -55,13 +56,29 @@ func validateAudio(c Config) error {
 	if c.Profile != PlaybackProfile && c.Profile != MonoProfile {
 		return errors.New("perfil de reproduccion no compatible")
 	}
-	mode := "stereo"
-	if c.Profile == MonoProfile {
-		mode = "mono"
-	}
+	assigned := map[int]string{}
 	for _, z := range c.Zones {
-		if z.ChannelMode != mode || z.Output == nil || z.Output.DeviceID != "default" || !reflect.DeepEqual(z.Output.Channels, []int{1, 2}) {
-			return errors.New("unsupported_output: requiere salida compartida default [1,2] y modo del engine")
+		if z.ChannelMode != "mono" && z.ChannelMode != "stereo" {
+			return errors.New("unsupported_output: channel_mode debe ser mono o stereo")
+		}
+		if c.Profile == MonoProfile && z.ChannelMode != "mono" {
+			return errors.New("unsupported_output: el perfil mono solo admite zonas mono")
+		}
+		channelCount := 2
+		if z.ChannelMode == "mono" {
+			channelCount = 1
+		}
+		if z.Output == nil || z.Output.DeviceID != "default" || len(z.Output.Channels) != channelCount {
+			return fmt.Errorf("unsupported_output: zona %q requiere salida default con %d canal(es)", z.ID, channelCount)
+		}
+		for _, channel := range z.Output.Channels {
+			if channel < 1 {
+				return fmt.Errorf("unsupported_output: canal invalido %d en zona %q", channel, z.ID)
+			}
+			if owner, exists := assigned[channel]; exists {
+				return fmt.Errorf("unsupported_output: canal %d compartido por zonas %q y %q", channel, owner, z.ID)
+			}
+			assigned[channel] = z.ID
 		}
 		if z.Playlist == nil {
 			continue
@@ -88,7 +105,7 @@ func validateAudio(c Config) error {
 func (r *Runtime) applyAudio(c Config) error {
 	configs := make([]engine.ZoneConfig, 0, len(c.Zones))
 	for _, z := range c.Zones {
-		configs = append(configs, engine.ZoneConfig{ID: z.ID})
+		configs = append(configs, engine.ZoneConfig{ID: z.ID, OutputChannels: append([]int(nil), z.Output.Channels...)})
 	}
 	if err := r.audio.Reconfigure(configs); err != nil {
 		return err

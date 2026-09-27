@@ -3,12 +3,38 @@ package player
 import (
 	"context"
 	"errors"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"music-engine/internal/audio"
 )
+
+type observingOutput struct {
+	audio.Output
+	volume float64
+}
+
+func (o *observingOutput) Open(source io.Reader, format audio.PCMFormat) (audio.Stream, error) {
+	stream, err := o.Output.Open(source, format)
+	if err != nil {
+		return nil, err
+	}
+	return &observingStream{Stream: stream, output: o}, nil
+}
+
+type observingStream struct {
+	audio.Stream
+	output *observingOutput
+}
+
+func (s *observingStream) SetVolume(volume float64) {
+	s.output.volume = volume
+	s.Stream.SetVolume(volume)
+}
 
 func TestMissingAndInvalidMP3(t *testing.T) {
 	p := New()
@@ -133,6 +159,8 @@ func TestNavigationIntegration(t *testing.T) {
 		}
 	}
 	p := New(first, second)
+	output := &observingOutput{Output: p.output}
+	p.output = output
 	defer p.Stop()
 	if err := p.SetVolume(0.1); err != nil {
 		t.Fatal(err)
@@ -160,8 +188,8 @@ func TestNavigationIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	check("PLAYING", 1)
-	if p.audio.player.Volume() != 0.1 {
-		t.Fatal("Oto no conserva volumen")
+	if output.volume != 0.1 {
+		t.Fatal("la salida no conserva el volumen")
 	}
 	if err := p.Next(); err != nil {
 		t.Fatal(err)

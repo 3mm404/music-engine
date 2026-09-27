@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"music-engine/internal/audio/mixer"
 	"music-engine/internal/player"
 )
 
@@ -87,6 +88,31 @@ func TestReconfigurePreservesExistingZoneAndClosesRemovedHandle(t *testing.T) {
 	}
 }
 
+func TestRoutingRequiresCompleteNonOverlappingZoneAssignments(t *testing.T) {
+	valid := []ZoneConfig{
+		{ID: "pool", OutputChannels: []int{1, 2}},
+		{ID: "lobby", OutputChannels: []int{3}},
+	}
+	m, err := NewWithOutput(nil, valid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	invalid := [][]ZoneConfig{
+		{{ID: "pool", OutputChannels: []int{1, 2}}, {ID: "lobby"}},
+		{{ID: "pool", OutputChannels: []int{1, 2}}, {ID: "lobby", OutputChannels: []int{2}}},
+		{{ID: "mono", OutputChannels: []int{0}}},
+	}
+	for _, configs := range invalid {
+		if _, err := NewWithOutput(nil, configs); err == nil {
+			t.Fatalf("accepted invalid routes: %+v", configs)
+		}
+	}
+}
+
 func (p *monitoredPlayer) GetState() player.State {
 	select {
 	case p.polled <- struct{}{}:
@@ -99,8 +125,8 @@ func (p *monitoredPlayer) GetState() player.State {
 
 func TestMonitorWithoutConsoleAndErrorIsolation(t *testing.T) {
 	var players []*monitoredPlayer
-	m, err := newManager([]ZoneConfig{{ID: "A"}, {ID: "B"}}, func(paths []string) playback {
-		p := &monitoredPlayer{Player: player.New(paths...), polled: make(chan struct{}, 1)}
+	m, err := newManager([]ZoneConfig{{ID: "A"}, {ID: "B"}}, mixer.New(nil), func(config ZoneConfig) playback {
+		p := &monitoredPlayer{Player: player.New(config.Tracks...), polled: make(chan struct{}, 1)}
 		players = append(players, p)
 		return p
 	})

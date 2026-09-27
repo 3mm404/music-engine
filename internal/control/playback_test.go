@@ -25,6 +25,46 @@ func audioConfig(raw string, data []byte) Config {
 	return c
 }
 
+func TestValidateAudioAcceptsDistinctStereoAndMonoRoutes(t *testing.T) {
+	c := audioConfig("https://audio.example.test/song.mp3", nil)
+	c.Zones[0].Playlist = nil
+	second := c.Zones[0]
+	second.ID, second.Name = "lobby", "Lobby"
+	second.Output = &Output{DeviceID: "default", Channels: []int{3, 4}}
+	third := c.Zones[0]
+	third.ID, third.Name, third.ChannelMode = "restaurant", "Restaurant", "mono"
+	third.Output = &Output{DeviceID: "default", Channels: []int{5}}
+	c.Zones = append(c.Zones, second, third)
+	if err := validateAudio(c); err != nil {
+		t.Fatalf("valid mixed routes rejected: %v", err)
+	}
+
+	c.Zones[2].Output.Channels = []int{4}
+	if err := validateAudio(c); err == nil {
+		t.Fatal("overlapping output channel accepted")
+	}
+	c.Zones[2].Output.Channels = []int{5, 6}
+	if err := validateAudio(c); err == nil {
+		t.Fatal("stereo-sized route accepted for mono zone")
+	}
+}
+
+func TestApplyAudioPropagatesZoneChannelAssignments(t *testing.T) {
+	manager, err := engine.NewRemoteWithOutput(nil, decoder.HTTPS{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	r := &Runtime{audio: manager}
+	c := Config{Zones: []Zone{
+		{ID: "pool", ChannelMode: "stereo", Output: &Output{DeviceID: "default", Channels: []int{1, 2}}},
+		{ID: "lobby", ChannelMode: "stereo", Output: &Output{DeviceID: "default", Channels: []int{2, 3}}},
+	}}
+	if err := r.applyAudio(c); err == nil {
+		t.Fatal("Manager accepted overlapping routes forwarded by applyAudio")
+	}
+}
+
 func TestSpecificSongSelectionAndInvalidSelectionPreservesPending(t *testing.T) {
 	s := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		<-req.Context().Done()

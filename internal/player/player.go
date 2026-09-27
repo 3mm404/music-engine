@@ -1,4 +1,4 @@
-// Package player controla una reproduccion local; el backend Oto vive en oto.go.
+// Package player controls a local playback stream.
 package player
 
 import (
@@ -13,16 +13,21 @@ import (
 	"sync"
 	"time"
 
+	"music-engine/internal/audio"
+	otooutput "music-engine/internal/audio/oto"
 	"music-engine/internal/decoder"
 )
 
 var ErrNoTrack = errors.New("no hay un archivo cargado; llama a Play primero")
 
-// Player conserva el stream mientras Oto lo lee. Sus metodos admiten concurrencia.
+const playbackCompletionGrace = 100 * time.Millisecond
+
+// Player conserva el stream mientras la salida de audio lo consume. Sus metodos admiten concurrencia.
 type Player struct {
 	mu           sync.Mutex
 	stream       *decoder.Stream
-	audio        *audioOutput
+	output       audio.Output
+	audio        audio.Stream
 	paused       bool
 	tracks       []string
 	index        int
@@ -40,21 +45,33 @@ type Player struct {
 
 // NewRemote fixes the rate promised in configuration and permits a trusted HTTP transport.
 func NewRemote(rate int, source decoder.HTTPS) *Player {
-	p := New()
+	return NewRemoteWithOutput(otooutput.NewOutput(), rate, source)
+}
+
+func NewRemoteWithOutput(output audio.Output, rate int, source decoder.HTTPS) *Player {
+	p := NewWithOutput(output)
 	p.expectedRate, p.remote = rate, source
 	return p
 }
 
 func NewRemoteMono(rate int, source decoder.HTTPS) *Player {
-	p := NewRemote(rate, source)
+	return NewRemoteMonoWithOutput(otooutput.NewOutput(), rate, source)
+}
+
+func NewRemoteMonoWithOutput(output audio.Output, rate int, source decoder.HTTPS) *Player {
+	p := NewRemoteWithOutput(output, rate, source)
 	p.mono = true
 	return p
 }
 
 // New copia una lista opcional. El orden recibido define Next y Previous.
 func New(paths ...string) *Player {
+	return NewWithOutput(otooutput.NewOutput(), paths...)
+}
+
+func NewWithOutput(output audio.Output, paths ...string) *Player {
 	tracks := append([]string(nil), paths...)
-	return &Player{tracks: tracks, index: -1, volume: 1}
+	return &Player{output: output, tracks: tracks, index: -1, volume: 1}
 }
 
 // Play abre el archivo e inicia audio en segundo plano. Wait permite esperar el final.
@@ -104,17 +121,21 @@ func (p *Player) installLocked(path string, source *decoder.Stream) error {
 	if p.mono {
 		pcm = &monoReader{source: source}
 	}
-	audio, err := openOutput(pcm, source.SampleRate())
+	stream, err := p.output.Open(pcm, audio.PCMFormat{
+		SampleRate:   source.SampleRate(),
+		Channels:     2,
+		SampleFormat: audio.SignedInt16LE,
+	})
 	if err != nil {
 		source.Close()
 		return err
 	}
 	if err := p.stopLocked(); err != nil {
-		audio.pause()
+		stream.Pause()
 		source.Close()
 		return err
 	}
-	p.stream, p.audio, p.paused = source, audio, false
+	p.stream, p.audio, p.paused = source, stream, false
 	p.current, p.index, p.lastError = path, -1, nil
 	for i, track := range p.tracks {
 		if track == path {
@@ -131,8 +152,8 @@ func (p *Player) installLocked(path string, source *decoder.Stream) error {
 			break
 		}
 	}
-	audio.setVolume(p.volume)
-	audio.play()
+	stream.SetVolume(p.volume)
+	stream.Play()
 	return nil
 }
 
@@ -224,9 +245,9 @@ func (p *Player) Pause() error {
 	if p.audio == nil {
 		return ErrNoTrack
 	}
-	p.audio.pause()
+	p.audio.Pause()
 	p.paused = true
-	return p.audio.err()
+	return p.audio.Err()
 }
 
 func (p *Player) Resume() error {
@@ -235,11 +256,11 @@ func (p *Player) Resume() error {
 	if p.audio == nil {
 		return ErrNoTrack
 	}
-	if err := p.audio.err(); err != nil {
+	if err := p.audio.Err(); err != nil {
 		return err
 	}
 	if p.paused {
-		p.audio.play()
+		p.audio.Play()
 		p.paused = false
 	}
 	return nil
@@ -259,8 +280,8 @@ func (p *Player) stopLocked() error {
 		return nil
 	}
 	// Espera a que termine cualquier Read antes de cerrar el archivo.
-	p.audio.pause()
-	err := errors.Join(p.audio.err(), p.stream.Close())
+	p.audio.Pause()
+	err := errors.Join(p.audio.Err(), p.stream.Close())
 	p.audio, p.stream, p.paused = nil, nil, false
 	return err
 }
@@ -287,8 +308,8 @@ func (p *Player) Wait(ctx context.Context) error {
 			continue
 		}
 		current := p.audio
-		err := current.err()
-		finished := !p.paused && !p.audio.playing()
+		err := current.Err()
+		finished := !p.paused && !p.audio.IsPlaying()
 		p.mu.Unlock()
 		if err != nil {
 			p.mu.Lock()
@@ -299,14 +320,14 @@ func (p *Player) Wait(ctx context.Context) error {
 			return err
 		}
 		if finished {
-			timer := time.NewTimer(2 * outputBuffer)
+			timer := time.NewTimer(playbackCompletionGrace)
 			select {
 			case <-ctx.Done():
 				timer.Stop()
 				return errors.Join(ctx.Err(), p.Stop())
 			case <-timer.C:
 				p.mu.Lock()
-				if p.audio == current && !p.paused && !p.audio.playing() {
+				if p.audio == current && !p.paused && !p.audio.IsPlaying() {
 					err := p.stopLocked()
 					p.mu.Unlock()
 					return err
@@ -336,7 +357,7 @@ type State struct {
 func (p *Player) GetState() State {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.audio != nil && (p.audio.err() != nil || (!p.paused && !p.audio.playing())) {
+	if p.audio != nil && (p.audio.Err() != nil || (!p.paused && !p.audio.IsPlaying())) {
 		p.lastError = p.stopLocked()
 	}
 	status := "STOPPED"
@@ -371,7 +392,7 @@ func (p *Player) SetVolume(volume float64) error {
 	defer p.mu.Unlock()
 	p.volume = volume
 	if p.audio != nil {
-		p.audio.setVolume(volume)
+		p.audio.SetVolume(volume)
 	}
 	return nil
 }

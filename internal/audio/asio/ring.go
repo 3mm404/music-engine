@@ -62,6 +62,11 @@ func (r *frameRing) Write(samples []int16) int {
 // ReadPlanar fills driver-owned channel buffers. Missing frames are silence.
 // It returns true if any part of this callback underruns.
 func (r *frameRing) ReadPlanar(outputs [][]float32, gain float32) bool {
+	_, underrun := r.ReadPlanarCount(outputs, gain)
+	return underrun
+}
+
+func (r *frameRing) ReadPlanarCount(outputs [][]float32, gain float32) (int, bool) {
 	frames := 0
 	for _, channel := range outputs {
 		if len(channel) > frames {
@@ -69,6 +74,7 @@ func (r *frameRing) ReadPlanar(outputs [][]float32, gain float32) bool {
 		}
 	}
 	readAt := r.read.Load()
+	initialRead := readAt
 	underrun := false
 	for frame := 0; frame < frames; frame++ {
 		writeAt := r.write.Load()
@@ -95,7 +101,7 @@ func (r *frameRing) ReadPlanar(outputs [][]float32, gain float32) bool {
 		readAt++
 	}
 	r.read.Store(readAt)
-	return underrun
+	return int(readAt - initialRead), underrun
 }
 
 func (r *frameRing) OverflowFrames() uint64 { return r.overflow.Load() }

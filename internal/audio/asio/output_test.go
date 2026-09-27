@@ -33,8 +33,9 @@ type fakeDevice struct {
 	reset       bool
 }
 
-func (d *fakeDevice) Channels() (int, int) { return d.inputCount, d.outputCount }
-func (d *fakeDevice) SampleRate() float64  { return d.rate }
+func (d *fakeDevice) Channels() (int, int)        { return d.inputCount, d.outputCount }
+func (d *fakeDevice) SampleRate() float64         { return d.rate }
+func (d *fakeDevice) CanSampleRate(float64) error { return nil }
 func (d *fakeDevice) SetSampleRate(rate float64) error {
 	d.rate = rate
 	return nil
@@ -92,6 +93,10 @@ func TestOutputValidatesDeviceChannelsAndStartsOneMultichannelStream(t *testing.
 	if streamHandle.IsPlaying() {
 		t.Fatal("finite source should be stopped after queued frames drain")
 	}
+	diagnostics := streamHandle.(*stream).Diagnostics()
+	if diagnostics.ProducerFrames != 4 || diagnostics.CallbackCalls != 1 || diagnostics.CallbackFrames != 4 || diagnostics.ConsumedFrames != 4 {
+		t.Fatalf("frame diagnostics = %+v", diagnostics)
+	}
 	if err := output.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -133,6 +138,13 @@ func TestOpenInstalledASIODriverOptional(t *testing.T) {
 	_, channels := driver.Channels()
 	minSize, maxSize, preferred, granularity := driver.BufferSizes()
 	t.Logf("opened ASIO driver %q: %.0f Hz, %d outputs, buffers %d-%d preferred %d granularity %d", name, driver.SampleRate(), channels, minSize, maxSize, preferred, granularity)
+	for _, rate := range []float64{44100, 48000} {
+		if err := driver.CanSampleRate(rate); err != nil {
+			t.Logf("sample rate %.0f Hz: unsupported (%v)", rate, err)
+		} else {
+			t.Logf("sample rate %.0f Hz: supported", rate)
+		}
+	}
 	if channels < 1 || minSize < 1 || maxSize < minSize {
 		t.Fatalf("driver reported invalid capabilities: channels=%d buffers=%d-%d", channels, minSize, maxSize)
 	}

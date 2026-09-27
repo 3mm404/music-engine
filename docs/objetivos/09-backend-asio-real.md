@@ -51,17 +51,21 @@ El callback ASIO no lee el decoder ni el stream del mixer, no toma mutexes y no 
 
 El conversor remuestrea PCM int16 intercalado cuando la frecuencia configurada difiere de la entrada, rellena con cero los canales ASIO superiores a los del PCM, y la capa host convierte a planos Float32/formato nativo del driver. Se validan el formato, frecuencia, cantidad de canales y tamaño de buffer antes de iniciar el callback. Solo se admite un driver ASIO abierto por proceso, de acuerdo con el modelo del host.
 
+Al iniciar, `cmd/agent` registra el backend elegido y la configuración ASIO solicitada. Al abrir el stream, ASIO registra capacidades/configuración efectiva y formato PCM. Durante la reproducción, cada cinco segundos informa frames producidos desde el router, llamadas/frames del callback, frames consumidos, underruns y overflow del ring. `control.applyAudio` registra `output.channels` cuando cambia el routing. El callback no escribe logs.
+
 ## Verificación
 
 - `go test -count=1 ./...`: aprobado.
 - `go vet ./...`: aprobado.
 - Pruebas deterministas cubren ring buffer, interleaved a planar, underrun silencioso, overflow controlado, remuestreo, canales, configuración, ciclo de vida y concurrencia.
 - `CGO_ENABLED=0 go test -count=1 ./internal/audio/asio`: aprobado en Windows amd64; confirma que el backend no depende de CGo.
-- El inventario de Windows encontró Ableton Move/Push, SSL ASIO Driver 1-4 y Dante Virtual Soundcard (x64).
-- La inicialización de Dante Virtual Soundcard se intentó sin iniciar el stream y falló con `Error connecting to Dante Virtual Soundcard Manager`. SSL ASIO Driver 1 también falló con `No device is connected to the PC.` No se hizo prueba de tono ni se afirma reproducción física.
+- El inventario de Windows encontró Ableton Move/Push, SSL ASIO Driver 1-4 y Dante Virtual Soundcard (x64). Windows también lista Realtek High Definition Audio, pero no hay un driver ASIO Realtek registrado.
+- Una prueba de apertura/cierre de Dante Virtual Soundcard sin iniciar streaming pasó: reportó 48000 Hz actuales, 128 salidas, buffers 32–2048, preferido 64, granularidad potencia de dos; el driver anuncia soporte para 44100 y 48000 Hz. Buffer 64 y ocho canales están dentro de esas capacidades.
+- Ableton Move/Push y SSL ASIO Driver 1-4 fallaron al inicializar con `No device is connected to the PC.` La prueba DVS solo inicializó/consultó/cerró el driver: no creó buffers de stream, no ejecutó callback ni reprodujo un tono. No se afirma reproducción física.
+- El `bin/agent.exe` de la instalación local tenía timestamp anterior a los cambios diagnósticos de `cmd/agent/main.go` y `internal/audio/asio/output.go`; reconstruirlo antes del siguiente ensayo con `CGO_ENABLED=0 go build -o bin/agent.exe ./cmd/agent`.
 
 ## Estado físico y siguiente etapa
 
-La implementación por software está disponible, pero el driver no pudo inicializarse porque Dante Virtual Soundcard no está conectada a su Manager y los drivers SSL no detectan dispositivo. Se necesita instalar/iniciar correctamente Dante Virtual Soundcard Manager, disponer de DVS autorizado/operativo y volver a ejecutar la prueba con `ENGINE_AUDIO_BACKEND=asio`, `ENGINE_ASIO_DRIVER='Dante Virtual Soundcard (x64)'`, frecuencia, buffer y canales compatibles. Después debe comprobarse el mapeo de canales y un tono conocido en el dispositivo.
+La implementación por software está disponible y DVS pudo inicializarse durante la prueba aislada. Todavía falta probar el stream real del Engine con el driver DVS abierto, comprobar que callback y ring reciben PCM y verificar físicamente un tono en las salidas DVS CH1–2. Si una ejecución previa del agente reporta fallo, conservar el mensaje nuevo `ASIO driver initialized: no` y el error asociado; los logs persistentes antiguos no reflejan necesariamente esa ejecución.
 
 Dante/Q-SYS no se configuró ni validó. Una vez que DVS pueda abrirse y se verifique audio multicanal real, la integración/ruteo Dante hacia Q-SYS corresponde al objetivo físico posterior.

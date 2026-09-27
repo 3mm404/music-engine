@@ -330,6 +330,21 @@ func (d *Driver) SampleRate() float64 {
 	return sr
 }
 
+// CanSampleRate queries a rate without switching the device clock.
+func (d *Driver) CanSampleRate(sr float64) error {
+	if sr <= 0 || math.IsNaN(sr) || math.IsInf(sr, 0) {
+		return fmt.Errorf("sample rate ASIO invalido: %v", sr)
+	}
+	var err error
+	d.com.do(func() {
+		bits := uintptr(math.Float64bits(sr))
+		if int32(d.call(vtCanSampleRate, bits)) != aseOK {
+			err = fmt.Errorf("el driver no admite %.0f Hz", sr)
+		}
+	})
+	return err
+}
+
 // SetSampleRate asks the driver to switch sample rate.
 func (d *Driver) SetSampleRate(sr float64) error {
 	var err error

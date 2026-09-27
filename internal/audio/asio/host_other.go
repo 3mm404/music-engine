@@ -16,3 +16,6 @@ func openASIODriver(string) (device, error) {
 
 func (*Driver) Stop() error  { return nil }
 func (*Driver) Close() error { return nil }
+func (*Driver) CanSampleRate(float64) error {
+	return errors.New("ASIO solo está disponible en Windows amd64")
+}

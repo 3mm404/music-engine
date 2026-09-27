@@ -10,6 +10,7 @@ import (
 	"music-engine/internal/control"
 	"os"
 	"os/signal"
+	"strings"
 )
 
 var version = "0.6.0"
@@ -40,6 +41,17 @@ func main() {
 	}
 	var output audio.Output
 	if profile == control.PlaybackProfile || profile == control.MonoProfile {
+		backendName := strings.ToLower(strings.TrimSpace(os.Getenv("ENGINE_AUDIO_BACKEND")))
+		if backendName == "" {
+			backendName = "oto"
+		}
+		log.Printf("Audio backend: %s", strings.ToUpper(backendName))
+		if backendName == "asio" {
+			log.Printf("Oto output: not selected (ASIO backend is exclusive; no automatic fallback)")
+			log.Printf("ASIO driver requested: %q sample_rate=%q buffer_size=%q output_channels=%q",
+				os.Getenv("ENGINE_ASIO_DRIVER"), os.Getenv("ENGINE_ASIO_SAMPLE_RATE"),
+				os.Getenv("ENGINE_ASIO_BUFFER_SIZE"), os.Getenv("ENGINE_ASIO_CHANNELS"))
+		}
 		var err error
 		output, err = backend.FromEnvironment()
 		if err != nil {

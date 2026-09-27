@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
 	"reflect"
 	"strings"
 	"time"
@@ -123,6 +124,7 @@ func (r *Runtime) applyAudio(c Config) error {
 		}
 		p, _ := r.audio.Zone(z.ID)
 		if old == nil || !samePlaylist(old.Playlist, z.Playlist) || !reflect.DeepEqual(old.Output, z.Output) || old.ChannelMode != z.ChannelMode {
+			log.Printf("Audio zone routing applied: zone=%q mode=%s device=%q output.channels=%v", z.ID, z.ChannelMode, z.Output.DeviceID, z.Output.Channels)
 			p.Stop()
 			r.selected[z.ID] = 0
 			for _, pending := range r.pending {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"strings"
 	"sync"
@@ -52,6 +53,7 @@ func (c Config) Validate() error {
 type device interface {
 	Channels() (int, int)
 	SampleRate() float64
+	CanSampleRate(float64) error
 	SetSampleRate(float64) error
 	BufferSizes() (int, int, int, int)
 	StartWithBuffer([]int, []int, int, Processor) error
@@ -83,7 +85,12 @@ func AvailableDrivers() ([]string, error) {
 	return availableDriverNames()
 }
 
-func (o *Output) Open(source io.Reader, format audio.PCMFormat) (audio.Stream, error) {
+func (o *Output) Open(source io.Reader, format audio.PCMFormat) (opened audio.Stream, openErr error) {
+	defer func() {
+		if openErr != nil {
+			log.Printf("ASIO driver initialized: no; driver=%q error=%v", o.config.DriverName, openErr)
+		}
+	}()
 	if source == nil || format.SampleFormat != audio.SignedInt16LE || format.SampleRate <= 0 || format.Channels < 1 || format.Channels > maxChannels {
 		return nil, fmt.Errorf("formato PCM ASIO invalido: %+v", format)
 	}
@@ -105,7 +112,7 @@ func (o *Output) Open(source io.Reader, format audio.PCMFormat) (audio.Stream, e
 		return nil, err
 	}
 	cleanup := func() { driver.Close() }
-	_, availableChannels := driver.Channels()
+	inputChannels, availableChannels := driver.Channels()
 	channels := o.config.Channels
 	if channels == 0 {
 		channels = format.Channels
@@ -118,6 +125,10 @@ func (o *Output) Open(source io.Reader, format audio.PCMFormat) (audio.Stream, e
 	sampleRate := o.config.SampleRate
 	if sampleRate == 0 {
 		sampleRate = format.SampleRate
+	}
+	if err := driver.CanSampleRate(float64(sampleRate)); err != nil {
+		cleanup()
+		return nil, fmt.Errorf("driver ASIO %q no soporta %d Hz: %w", o.config.DriverName, sampleRate, err)
 	}
 	if err := driver.SetSampleRate(float64(sampleRate)); err != nil {
 		cleanup()
@@ -147,6 +158,7 @@ func (o *Output) Open(source io.Reader, format audio.PCMFormat) (audio.Stream, e
 	ctx, cancel := context.WithCancel(context.Background())
 	outputStream := &stream{
 		driver:        driver,
+		driverName:    o.config.DriverName,
 		source:        source,
 		inputChannels: format.Channels,
 		channels:      channels,
@@ -171,6 +183,15 @@ func (o *Output) Open(source io.Reader, format audio.PCMFormat) (audio.Stream, e
 		return nil, fmt.Errorf("iniciar driver ASIO %q: %w", o.config.DriverName, err)
 	}
 	o.stream = outputStream
+	log.Printf("Audio backend: ASIO")
+	log.Printf("ASIO driver: %s", o.config.DriverName)
+	log.Printf("Sample rate: %d Hz (input PCM %d Hz)", sampleRate, format.SampleRate)
+	log.Printf("Buffer size: %d frames", bufferSize)
+	log.Printf("Output channels: %d opened (%d available); input channels: %d", channels, availableChannels, inputChannels)
+	log.Printf("ASIO device output indices (zero-based): %v", outputs)
+	log.Printf("PCM delivered to asio.Output: sample=int16le interleaved=true input_channels=%d", format.Channels)
+	log.Printf("Driver initialized: yes")
+	go outputStream.report()
 	return outputStream, nil
 }
 
@@ -206,24 +227,29 @@ func (o *Output) Close() error {
 }
 
 type stream struct {
-	driver        device
-	source        io.Reader
-	inputChannels int
-	channels      int
-	inputRate     int
-	outputRate    int
-	bufferSize    int
-	ring          *frameRing
-	ctx           context.Context
-	cancel        context.CancelFunc
-	done          chan struct{}
-	active        atomic.Bool
-	volume        atomic.Uint32
-	producerDone  atomic.Bool
-	stateMu       sync.Mutex
-	err           error
-	closeOnce     sync.Once
-	underruns     atomic.Uint64
+	driver         device
+	driverName     string
+	source         io.Reader
+	inputChannels  int
+	channels       int
+	inputRate      int
+	outputRate     int
+	bufferSize     int
+	ring           *frameRing
+	ctx            context.Context
+	cancel         context.CancelFunc
+	done           chan struct{}
+	active         atomic.Bool
+	volume         atomic.Uint32
+	producerDone   atomic.Bool
+	stateMu        sync.Mutex
+	err            error
+	closeOnce      sync.Once
+	underruns      atomic.Uint64
+	callbackCalls  atomic.Uint64
+	callbackFrames atomic.Uint64
+	consumedFrames atomic.Uint64
+	producerFrames atomic.Uint64
 }
 
 func (s *stream) Play()  { s.active.Store(true) }
@@ -254,6 +280,12 @@ func (s *stream) Err() error {
 func (s *stream) Underruns() uint64 { return s.underruns.Load() }
 
 func (s *stream) callback(_ [][]float32, outputs [][]float32) {
+	frames := 0
+	for _, channel := range outputs {
+		frames = max(frames, len(channel))
+	}
+	s.callbackCalls.Add(1)
+	s.callbackFrames.Add(uint64(frames))
 	gain := math.Float32frombits(s.volume.Load())
 	if !s.active.Load() {
 		for _, channel := range outputs {
@@ -261,7 +293,9 @@ func (s *stream) callback(_ [][]float32, outputs [][]float32) {
 		}
 		return
 	}
-	if s.ring.ReadPlanar(outputs, gain) {
+	consumed, underrun := s.ring.ReadPlanarCount(outputs, gain)
+	s.consumedFrames.Add(uint64(consumed))
+	if underrun {
 		s.underruns.Add(1)
 	}
 }
@@ -304,7 +338,11 @@ func (s *stream) produce() {
 					s.setError(fmt.Errorf("leer PCM para ASIO: %w", err))
 				}
 				if produced > 0 {
-					s.ring.Write(block[:produced*s.channels])
+					written := s.ring.Write(block[:produced*s.channels])
+					s.producerFrames.Add(uint64(written))
+					if written != produced {
+						s.setError(errors.New("overflow del ring buffer ASIO; se descartaron frames PCM"))
+					}
 				}
 				return
 			}
@@ -312,9 +350,54 @@ func (s *stream) produce() {
 		}
 		if produced > 0 {
 			written := s.ring.Write(block[:produced*s.channels])
+			s.producerFrames.Add(uint64(written))
 			if written != produced {
 				s.setError(errors.New("overflow del ring buffer ASIO; se descartaron frames PCM"))
 			}
+		}
+	}
+}
+
+type StreamDiagnostics struct {
+	Driver         string
+	InputRate      int
+	OutputRate     int
+	InputChannels  int
+	OutputChannels int
+	BufferSize     int
+	ProducerFrames uint64
+	CallbackCalls  uint64
+	CallbackFrames uint64
+	ConsumedFrames uint64
+	UnderrunCalls  uint64
+	OverflowFrames uint64
+	BufferedFrames int
+}
+
+func (s *stream) Diagnostics() StreamDiagnostics {
+	return StreamDiagnostics{
+		Driver: s.driverName, InputRate: s.inputRate, OutputRate: s.outputRate,
+		InputChannels: s.inputChannels, OutputChannels: s.channels, BufferSize: s.bufferSize,
+		ProducerFrames: s.producerFrames.Load(), CallbackCalls: s.callbackCalls.Load(),
+		CallbackFrames: s.callbackFrames.Load(), ConsumedFrames: s.consumedFrames.Load(),
+		UnderrunCalls: s.underruns.Load(), OverflowFrames: s.ring.OverflowFrames(),
+		BufferedFrames: s.ring.Available(),
+	}
+}
+
+func (s *stream) report() {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-ticker.C:
+			d := s.Diagnostics()
+			log.Printf("ASIO activity: driver=%q input_rate=%d output_rate=%d input_channels=%d output_channels=%d buffer_size=%d pcm_producer_frames=%d callback_calls=%d callback_frames=%d pcm_frames_consumed=%d underrun_callbacks=%d overflow_frames=%d ring_buffered_frames=%d",
+				d.Driver, d.InputRate, d.OutputRate, d.InputChannels, d.OutputChannels, d.BufferSize,
+				d.ProducerFrames, d.CallbackCalls, d.CallbackFrames, d.ConsumedFrames,
+				d.UnderrunCalls, d.OverflowFrames, d.BufferedFrames)
 		}
 	}
 }

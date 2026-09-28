@@ -18,16 +18,17 @@ import (
 
 // Runtime synchronizes configuration, durable commands and observed zone state.
 type Runtime struct {
-	client      *Client
-	journal     *Journal
-	deviceID    string
-	mu          sync.Mutex
-	config      Config
-	configError *ConfigError
-	sequence    int64
-	audio       *engine.Manager
-	selected    map[string]int
-	pending     map[string]*pendingPlayback
+	sharedStereo bool
+	client       *Client
+	journal      *Journal
+	deviceID     string
+	mu           sync.Mutex
+	config       Config
+	configError  *ConfigError
+	sequence     int64
+	audio        *engine.Manager
+	selected     map[string]int
+	pending      map[string]*pendingPlayback
 }
 
 func (r *Runtime) apply(c Config) error {
@@ -51,7 +52,7 @@ func (r *Runtime) apply(c Config) error {
 		if r.client != nil && r.client.profile != "" && c.Profile != r.client.profile {
 			return errors.New("perfil diferente al negociado")
 		}
-		if err := validateAudio(c); err != nil {
+		if err := validateAudioForOutput(c, r.sharedStereo); err != nil {
 			return err
 		}
 	}
@@ -267,7 +268,7 @@ func RunProfileWithOutput(ctx context.Context, server, token, version, stateDir,
 		return err
 	}
 	defer journal.Close()
-	r := &Runtime{client: client, journal: journal, deviceID: session.DeviceID}
+	r := &Runtime{client: client, journal: journal, deviceID: session.DeviceID, sharedStereo: audio.IsSharedStereo(output)}
 	if profile == PlaybackProfile || profile == MonoProfile {
 		media := decoder.HTTPS{Client: &http.Client{Transport: client.http.Transport}}
 		if output == nil && profile == MonoProfile {

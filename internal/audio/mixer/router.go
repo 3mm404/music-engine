@@ -69,6 +69,9 @@ func (r *Router) OutputForZone(zoneID string) audio.Output {
 // Configure replaces all routes atomically. Channels are one-based, ordered,
 // and exclusive; one channel downmixes stereo while two preserve L/R.
 func (r *Router) Configure(routes []Route) error {
+	if audio.IsSharedStereo(r.backend) && len(routes) > 0 {
+		return errors.New("Oto no admite ruteo fisico; use salida compartida sin asignaciones de canales")
+	}
 	configured := make(map[string][]int, len(routes))
 	owners := make(map[int]string)
 	maxChannels := 0
@@ -335,13 +338,15 @@ func (r *Router) Close() error {
 	}
 	output := r.output
 	r.mu.Unlock()
-	if output == nil {
-		return nil
+	if output != nil {
+		output.Pause()
 	}
-	output.Pause()
 	var closeErr error
 	if closer, ok := r.backend.(interface{ Close() error }); ok {
 		closeErr = closer.Close()
 	}
-	return errors.Join(output.Err(), closeErr)
+	if output != nil {
+		return errors.Join(output.Err(), closeErr)
+	}
+	return closeErr
 }

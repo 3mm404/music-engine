@@ -1,6 +1,6 @@
 # Go Music Engine: reproducción multizona
 
-**Ruta principal actual: ASIO → Dante Virtual Soundcard.** Consulta el [Objetivo 09](docs/objetivos/09-backend-asio-real.md) para el arranque y la validación actual. `start-local.ps1` fuerza ASIO con DVS x64, 48000 Hz y buffer 256; no existe fallback automático a Oto. Ambos ejecutables seleccionan ASIO por defecto y requieren `ENGINE_ASIO_DRIVER`. La consola enruta A a 1–2 y B a 3–4. Las referencias a Oto y salida compartida en las etapas anteriores de este documento son históricas.
+**Distribución actual: agente Windows x64 `engine.exe` 0.7.0, selector Oto/ASIO.** Consulta [la guía beta](BETA.md) para elegir Oto (mezcla en la salida del sistema) o ASIO (driver y canales físicos), y configurar servidor y credencial cifrada. Usa `%ProgramData%\UtrackSound` para configuración, diario y logs. No necesita Go en los equipos de prueba. Las instrucciones por variables y referencias a Oto que siguen son históricas; el agente actual se configura con `engine.exe configure`.
 
 El engine administra un `Player` independiente por zona. La consola arranca con **A y B**; el agente obtiene sus zonas desde Laravel. Cada una conserva su canción, volumen y estado. Pausar, detener o cambiar una zona no interrumpe las demás.
 
@@ -149,3 +149,6 @@ Las pruebas cubren IDs inválidos y desconocidos, tercera zona, copias de IDs, v
 La consola independiente no consulta configuración: un 403 requiere Play con otra URL. El agente conectado sí obtiene la firma renovada mediante Laravel. Se verificó la cadena completa con Laravel, HTTPS, el binario del agente y Oto reales en un entorno local aislado, tanto mono como estéreo; no se desplegó un servidor de producción.
 
 Ejemplo: `go run ./cmd/engine -file "https://servidor/audio/1?signature=..."`.
+
+
+

@@ -282,6 +282,9 @@ func (p *Player) stopLocked() error {
 	// Espera a que termine cualquier Read antes de cerrar el archivo.
 	p.audio.Pause()
 	err := errors.Join(p.audio.Err(), p.stream.Close())
+	if closer, ok := p.audio.(interface{ Close() error }); ok {
+		err = errors.Join(err, closer.Close())
+	}
 	p.audio, p.stream, p.paused = nil, nil, false
 	return err
 }

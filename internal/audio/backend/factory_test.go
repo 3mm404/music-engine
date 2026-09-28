@@ -64,3 +64,19 @@ func TestFromEnvironmentRejectsInvalidASIOValues(t *testing.T) {
 		t.Fatal("invalid channel count accepted")
 	}
 }
+
+func TestPersistentFactoryNoFallback(t *testing.T) {
+	output, err := New("oto", asio.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := output.(*oto.Output); !ok {
+		t.Fatalf("wrong backend %T", output)
+	}
+	if output, err := New("asio", asio.Config{}); err == nil || output != nil {
+		t.Fatal("invalid ASIO must fail without fallback")
+	}
+	if _, err := New("invalid", asio.Config{}); err == nil {
+		t.Fatal("unknown backend accepted")
+	}
+}

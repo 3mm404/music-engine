@@ -124,7 +124,7 @@ func audioRuntime(t *testing.T, s *httptest.Server) *Runtime {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { j.Close() })
-	return &Runtime{client: c, journal: j, deviceID: "1", audio: m}
+	return &Runtime{client: c, journal: j, deviceID: "1", audio: m, sharedStereo: true}
 }
 
 func awaitAudio(t *testing.T, r *Runtime, status string) {

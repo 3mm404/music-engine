@@ -53,7 +53,8 @@ func sameSnapshot(a, b Config) bool {
 	return true
 }
 
-func validateAudio(c Config) error {
+func validateAudio(c Config) error { return validateAudioForOutput(c, false) }
+func validateAudioForOutput(c Config, shared bool) error {
 	if c.Profile != PlaybackProfile && c.Profile != MonoProfile {
 		return errors.New("perfil de reproduccion no compatible")
 	}
@@ -69,17 +70,23 @@ func validateAudio(c Config) error {
 		if z.ChannelMode == "mono" {
 			channelCount = 1
 		}
-		if z.Output == nil || z.Output.DeviceID != "default" || len(z.Output.Channels) != channelCount {
-			return fmt.Errorf("unsupported_output: zona %q requiere salida default con %d canal(es)", z.ID, channelCount)
-		}
-		for _, channel := range z.Output.Channels {
-			if channel < 1 {
-				return fmt.Errorf("unsupported_output: canal invalido %d en zona %q", channel, z.ID)
+		if shared {
+			if z.Output != nil && (z.Output.DeviceID != "default" || (z.ChannelMode == "stereo" && !reflect.DeepEqual(z.Output.Channels, []int{1, 2})) || (z.ChannelMode == "mono" && !reflect.DeepEqual(z.Output.Channels, []int{1}))) {
+				return fmt.Errorf("unsupported_output: Oto mezcla todas las zonas en la salida del sistema; zona %q no puede asignar canales fisicos independientes", z.ID)
 			}
-			if owner, exists := assigned[channel]; exists {
-				return fmt.Errorf("unsupported_output: canal %d compartido por zonas %q y %q", channel, owner, z.ID)
+		} else {
+			if z.Output == nil || z.Output.DeviceID != "default" || len(z.Output.Channels) != channelCount {
+				return fmt.Errorf("unsupported_output: zona %q requiere salida default con %d canal(es)", z.ID, channelCount)
 			}
-			assigned[channel] = z.ID
+			for _, channel := range z.Output.Channels {
+				if channel < 1 {
+					return fmt.Errorf("unsupported_output: canal invalido %d en zona %q", channel, z.ID)
+				}
+				if owner, exists := assigned[channel]; exists {
+					return fmt.Errorf("unsupported_output: canal %d compartido por zonas %q y %q", channel, owner, z.ID)
+				}
+				assigned[channel] = z.ID
+			}
 		}
 		if z.Playlist == nil {
 			continue
@@ -106,7 +113,11 @@ func validateAudio(c Config) error {
 func (r *Runtime) applyAudio(c Config) error {
 	configs := make([]engine.ZoneConfig, 0, len(c.Zones))
 	for _, z := range c.Zones {
-		configs = append(configs, engine.ZoneConfig{ID: z.ID, OutputChannels: append([]int(nil), z.Output.Channels...)})
+		config := engine.ZoneConfig{ID: z.ID}
+		if !r.sharedStereo {
+			config.OutputChannels = append([]int(nil), z.Output.Channels...)
+		}
+		configs = append(configs, config)
 	}
 	if err := r.audio.Reconfigure(configs); err != nil {
 		return err
@@ -124,7 +135,11 @@ func (r *Runtime) applyAudio(c Config) error {
 		}
 		p, _ := r.audio.Zone(z.ID)
 		if old == nil || !samePlaylist(old.Playlist, z.Playlist) || !reflect.DeepEqual(old.Output, z.Output) || old.ChannelMode != z.ChannelMode {
-			log.Printf("Audio zone routing applied: zone=%q mode=%s device=%q output.channels=%v", z.ID, z.ChannelMode, z.Output.DeviceID, z.Output.Channels)
+			if !r.sharedStereo && z.Output != nil {
+				log.Printf("Audio zone routing applied: zone=%q mode=%s device=%q output.channels=%v", z.ID, z.ChannelMode, z.Output.DeviceID, z.Output.Channels)
+			} else {
+				log.Printf("Zona %q: mezcla compartida Oto", z.ID)
+			}
 			p.Stop()
 			r.selected[z.ID] = 0
 			for _, pending := range r.pending {

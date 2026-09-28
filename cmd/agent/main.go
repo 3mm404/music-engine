@@ -19,7 +19,7 @@ import (
 	"time"
 )
 
-var version = "0.7.0"
+var version = "0.8.0"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -31,6 +31,13 @@ func run(args []string) error {
 	command := "run"
 	if len(args) > 0 {
 		command, args = args[0], args[1:]
+	}
+	if command == "desktop-info" || command == "desktop-configure" {
+		return desktopCommand(command, args, os.Stdin, os.Stdout)
+	}
+	desktop := command == "run" && len(args) == 1 && args[0] == "--desktop"
+	if desktop {
+		args = nil
 	}
 	if command == "help" || command == "--help" || command == "-h" {
 		fmt.Println("UtrackSound " + version + " (Windows x64)\nengine.exe configure --backend oto|asio --server https://servidor\nengine.exe configure --backend oto --help\nengine.exe configure --backend asio --help\nengine.exe backend oto|asio (requiere cerrar el motor; conserva configuracion)\nLa credencial se solicita oculta; no se acepta como argumento.\nengine.exe drivers (solo ASIO)\nengine.exe run (opcion predeterminada)\nengine.exe version\nConfiguracion, diario y logs: %ProgramData%\\UtrackSound")
@@ -153,11 +160,16 @@ func run(args []string) error {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
+	var observer func(control.DesktopEvent)
+	if desktop {
+		observer = desktopObserver(os.Stdout)
+		go cancelOnDesktopClose(os.Stdin, cancel)
+	}
 	profile := control.PlaybackProfile
 	if cfg.Mode == "mono" {
 		profile = control.MonoProfile
 	}
-	err = control.RunProfileWithOutput(ctx, cfg.Server, token, version, filepath.Join(dir, "journal"), profile, output)
+	err = control.RunProfileObserved(ctx, cfg.Server, token, version, filepath.Join(dir, "journal"), profile, output, observer)
 	if err != nil {
 		log.Printf("Error: %v", err)
 	}

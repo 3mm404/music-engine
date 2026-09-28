@@ -227,6 +227,19 @@ func RunProfile(ctx context.Context, server, token, version, stateDir, profile s
 }
 
 func RunProfileWithOutput(ctx context.Context, server, token, version, stateDir, profile string, output audio.Output) error {
+	return RunProfileObserved(ctx, server, token, version, stateDir, profile, output, nil)
+}
+
+func RunProfileObserved(ctx context.Context, server, token, version, stateDir, profile string, output audio.Output, observer func(DesktopEvent)) error {
+	notify := func(channel string, err error) {
+		if observer != nil {
+			event := DesktopEvent{Type: "connection", Channel: channel, Connected: err == nil, At: time.Now().UTC()}
+			if err != nil {
+				event.Message = err.Error()
+			}
+			observer(event)
+		}
+	}
 	if profile != "configuration_only" && profile != PlaybackProfile && profile != MonoProfile {
 		return errors.New("ENGINE_PROFILE invalido")
 	}
@@ -249,6 +262,7 @@ func RunProfileWithOutput(ctx context.Context, server, token, version, stateDir,
 	var session Session
 	for attempt := 0; ; attempt++ {
 		session, err = client.Open(ctx, version)
+		notify("session", err)
 		if err == nil {
 			break
 		}
@@ -292,6 +306,20 @@ func RunProfileWithOutput(ctx context.Context, server, token, version, stateDir,
 	reportNow := make(chan struct{}, 1)
 	var workers sync.WaitGroup
 	defer func() { cancel(); workers.Wait() }()
+	if observer != nil {
+		workers.Go(func() {
+			ticker := time.NewTicker(time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					observer(r.desktopSnapshot())
+				}
+			}
+		})
+	}
 	if r.audio != nil {
 		workers.Go(func() {
 			ticker := time.NewTicker(100 * time.Millisecond)
@@ -332,6 +360,7 @@ func RunProfileWithOutput(ctx context.Context, server, token, version, stateDir,
 			report := r.report()
 			for attempt := 0; ; attempt++ {
 				err := client.Heartbeat(ctx, report)
+				notify("heartbeat", err)
 				if err == nil {
 					break
 				}
@@ -360,6 +389,7 @@ func RunProfileWithOutput(ctx context.Context, server, token, version, stateDir,
 	log.Printf("Engine %s conectado; perfil %s", session.DeviceID, profile)
 	for attempt := 0; ; {
 		err := r.cycle(ctx)
+		notify("sync", err)
 		if ctx.Err() != nil {
 			return nil
 		}

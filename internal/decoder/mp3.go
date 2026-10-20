@@ -2,12 +2,23 @@
 package decoder
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"os"
 
 	mp3 "github.com/hajimehoshi/go-mp3"
 )
+
+// memoryAudio retains io.Seeker so the MP3 decoder can measure the full PCM
+// length of verified downloads. io.NopCloser would hide this capability.
+type memoryAudio struct{ *bytes.Reader }
+
+func (m *memoryAudio) Close() error { return nil }
+
+func OpenBytes(data []byte) (*Stream, error) {
+	return OpenReader(&memoryAudio{Reader: bytes.NewReader(data)})
+}
 
 // Stream produce PCM signed int16 little-endian, siempre de dos canales.
 // El decoder procesa el audio a medida que el backend lo lee.

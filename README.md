@@ -1,6 +1,6 @@
 # Music Engine — beta Windows
 
-Motor Go para reproducción por zonas, conectado al backend Laravel y a Desktop Flutter. La entrada de producción es `cmd/agent`; la versión actual del código es 0.8.3.
+Motor Go para reproducción por zonas, conectado al backend Laravel y a Desktop Flutter. La entrada de producción es `cmd/agent`; la versión actual del código es 0.8.4.
 
 ## Leer y modificar el proyecto
 

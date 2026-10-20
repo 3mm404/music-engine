@@ -16,10 +16,12 @@ type DesktopEvent struct {
 }
 
 type DesktopZone struct {
-	ID       string   `json:"zone_id"`
-	Name     string   `json:"name"`
-	Playlist string   `json:"playlist"`
-	Songs    []string `json:"songs"`
+	ID         string   `json:"zone_id"`
+	Name       string   `json:"name"`
+	Playlist   string   `json:"playlist"`
+	Songs      []string `json:"songs"`
+	PositionMS *int     `json:"position_ms,omitempty"`
+	DurationMS *int     `json:"duration_ms,omitempty"`
 }
 
 // DesktopRequest is scoped to this process and the currently applied revision.

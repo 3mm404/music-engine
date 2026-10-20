@@ -1,4 +1,4 @@
-# UtrackSound beta 0.8.3 — Windows x64
+# UtrackSound beta 0.8.4 — Windows x64
 
 Distribuye engine.exe y esta guia. No requiere Go ni PowerShell como lanzador: PowerShell o Terminal solo sirven para introducir comandos. Configuracion, credencial DPAPI, diario y logs siguen en `%ProgramData%\UtrackSound`.
 

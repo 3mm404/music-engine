@@ -1,7 +1,6 @@
 package decoder
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -80,7 +79,7 @@ func (h HTTPS) Open(ctx context.Context, raw string, recovering func()) (*Stream
 					return nil, errors.New("contenido MP3 diferente de la version configurada")
 				}
 			}
-			return OpenReader(io.NopCloser(bytes.NewReader(data)))
+			return OpenBytes(data)
 		}
 		last = err
 		if !retry {

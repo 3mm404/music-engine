@@ -41,6 +41,9 @@ type Player struct {
 	jobs         sync.WaitGroup
 	expectedRate int
 	mono         bool
+	progress     *pcmProgress
+	positionMS   *int
+	durationMS   *int
 }
 
 // NewRemote fixes the rate promised in configuration and permits a trusted HTTP transport.
@@ -121,6 +124,8 @@ func (p *Player) installLocked(path string, source *decoder.Stream) error {
 	if p.mono {
 		pcm = &monoReader{source: source}
 	}
+	progress := &pcmProgress{rate: source.SampleRate(), length: source.Length()}
+	pcm = &progressReader{source: pcm, progress: progress}
 	stream, err := p.output.Open(pcm, audio.PCMFormat{
 		SampleRate:   source.SampleRate(),
 		Channels:     2,
@@ -136,6 +141,8 @@ func (p *Player) installLocked(path string, source *decoder.Stream) error {
 		return err
 	}
 	p.stream, p.audio, p.paused = source, stream, false
+	p.progress = progress
+	p.positionMS, p.durationMS = progress.times()
 	p.current, p.index, p.lastError = path, -1, nil
 	for i, track := range p.tracks {
 		if track == path {
@@ -175,6 +182,7 @@ func (p *Player) startRemoteLocked(path, hash string) error {
 	if err := p.stopLocked(); err != nil {
 		return err
 	}
+	p.progress, p.positionMS, p.durationMS = nil, nil, nil
 	ctx, cancel := context.WithCancel(context.Background())
 	p.cancel = cancel
 	generation := p.generation
@@ -273,7 +281,12 @@ func (p *Player) Stop() error {
 	defer p.mu.Unlock()
 	p.cancelLoadLocked()
 	p.lastError = nil
-	return p.stopLocked()
+	err := p.stopLocked()
+	if p.positionMS != nil {
+		zero := 0
+		p.positionMS = &zero
+	}
+	return err
 }
 
 // stopLocked cancela la carga y libera stream/salida de la pista; requiere p.mu. No cierra el backend compartido de otras zonas.
@@ -283,6 +296,10 @@ func (p *Player) stopLocked() error {
 	}
 	// Espera a que termine cualquier Read antes de cerrar el archivo.
 	p.audio.Pause()
+	if p.progress != nil {
+		p.positionMS, p.durationMS = p.progress.times()
+		p.progress = nil
+	}
 	err := errors.Join(p.audio.Err(), p.stream.Close())
 	if closer, ok := p.audio.(interface{ Close() error }); ok {
 		err = errors.Join(err, closer.Close())
@@ -350,12 +367,14 @@ func (p *Player) Wait(ctx context.Context) error {
 
 // State es una copia del estado actual; Track conserva la seleccion tras Stop.
 type State struct {
-	Status string
-	Track  string
-	Index  int // Base cero; -1 si la pista no pertenece a la lista.
-	Total  int
-	Volume float64 // 0 (silencio) a 1 (100%).
-	Error  error
+	Status     string
+	Track      string
+	Index      int // Base cero; -1 si la pista no pertenece a la lista.
+	Total      int
+	Volume     float64 // 0 (silencio) a 1 (100%).
+	Error      error
+	PositionMS *int
+	DurationMS *int
 }
 
 // GetState tambien detecta EOF y libera el archivo, sin avanzar automaticamente.
@@ -385,7 +404,11 @@ func (p *Player) GetState() State {
 			track = u.String()
 		}
 	}
-	return State{Status: status, Track: track, Index: p.index, Total: len(p.tracks), Volume: p.volume, Error: p.lastError}
+	position, duration := p.positionMS, p.durationMS
+	if p.progress != nil {
+		position, duration = p.progress.times()
+	}
+	return State{Status: status, Track: track, Index: p.index, Total: len(p.tracks), Volume: p.volume, Error: p.lastError, PositionMS: position, DurationMS: duration}
 }
 
 // SetVolume conserva la ganancia para pistas futuras, incluso estando detenido.

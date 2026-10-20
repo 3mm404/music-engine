@@ -41,7 +41,14 @@ func (r *Runtime) desktopSnapshot() DesktopEvent {
 				songs = append(songs, song.ID)
 			}
 		}
-		event.Zones = append(event.Zones, DesktopZone{ID: zone.ID, Name: zone.Name, Playlist: name, Songs: songs})
+		desktopZone := DesktopZone{ID: zone.ID, Name: zone.Name, Playlist: name, Songs: songs}
+		if r.audio != nil {
+			if player, err := r.audio.Zone(zone.ID); err == nil {
+				state := player.GetState()
+				desktopZone.PositionMS, desktopZone.DurationMS = state.PositionMS, state.DurationMS
+			}
+		}
+		event.Zones = append(event.Zones, desktopZone)
 	}
 	return event
 }

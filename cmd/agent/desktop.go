@@ -75,6 +75,7 @@ func desktopCommand(command string, args []string, input io.Reader, output io.Wr
 		return json.NewEncoder(output).Encode(map[string]any{"saved": true})
 	}
 	info := map[string]any{"protocol": 1, "version": version, "data_directory": dir, "configured": false, "running": false, "drivers": []string{}}
+	info["capabilities"] = control.DesktopCapabilities()
 	lock, lockErr := localconfig.Lock(dir)
 	if lockErr == nil {
 		lock.Close()
@@ -112,10 +113,36 @@ func desktopObserver(output io.Writer) func(control.DesktopEvent) {
 
 // EOF also stops audio if the desktop is closed or crashes.
 func cancelOnDesktopClose(input io.Reader, cancel context.CancelFunc) {
+	readDesktopInput(context.Background(), input, cancel, nil, nil)
+}
+
+func readDesktopInput(ctx context.Context, input io.Reader, cancel context.CancelFunc, requests chan<- control.DesktopRequest, observe func(control.DesktopEvent)) {
 	defer cancel()
 	scanner := bufio.NewScanner(input)
 	for scanner.Scan() {
 		if strings.TrimSpace(scanner.Text()) == "stop" {
+			return
+		}
+		if requests == nil {
+			continue
+		}
+		var request control.DesktopRequest
+		decoder := json.NewDecoder(strings.NewReader(scanner.Text()))
+		decoder.DisallowUnknownFields()
+		err := decoder.Decode(&request)
+		var extra any
+		if err == nil && decoder.Decode(&extra) != io.EOF {
+			err = errors.New("extra JSON")
+		}
+		if err != nil || request.RequestID == "" || len(request.RequestID) > 128 {
+			if observe != nil {
+				observe(control.DesktopEvent{Type: "log", Message: "Orden desktop invalida"})
+			}
+			continue
+		}
+		select {
+		case requests <- request:
+		case <-ctx.Done():
 			return
 		}
 	}

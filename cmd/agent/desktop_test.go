@@ -54,3 +54,18 @@ func TestDesktopObserverWritesJSON(t *testing.T) {
 		t.Fatal("incorrect desktop event")
 	}
 }
+
+func TestDesktopReadsPlaybackAndRejectsMalformedInput(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	requests := make(chan control.DesktopRequest, 4)
+	var logs int
+	input := "invalid\n{\"request_id\":\"r1\",\"zone_id\":\"z1\",\"config_revision\":3,\"action\":\"pause\"}\nstop\n"
+	readDesktopInput(ctx, strings.NewReader(input), cancel, requests, func(event control.DesktopEvent) { logs++ })
+	if ctx.Err() == nil || len(requests) != 1 || logs != 1 {
+		t.Fatal("invalid desktop input routing")
+	}
+	request := <-requests
+	if request.RequestID != "r1" || request.Action != "pause" || request.Revision != 3 {
+		t.Fatal("request changed")
+	}
+}

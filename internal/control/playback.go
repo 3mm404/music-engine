@@ -18,10 +18,11 @@ const PlaybackProfile = "shared_stereo_mp3"
 const MonoProfile = "shared_mono_mp3"
 
 type pendingPlayback struct {
-	command Command
-	song    Song
-	renewed bool
-	failure *Failure
+	desktopRequestID string
+	command          Command
+	song             Song
+	renewed          bool
+	failure          *Failure
 }
 
 func samePlaylist(a, b *Playlist) bool {
@@ -148,7 +149,13 @@ func (r *Runtime) applyAudio(c Config) error {
 				}
 			}
 		}
-		p.SetVolume(float64(z.Volume) / 100)
+		volume := z.Volume
+		if c.Revision == r.config.Revision {
+			volume = r.zoneVolume(z)
+		}
+		if err := p.SetVolume(float64(volume) / 100); err != nil {
+			return err
+		}
 	}
 	for id := range r.selected {
 		if _, err := r.audio.Zone(id); err != nil {
@@ -246,7 +253,7 @@ func (r *Runtime) supersede(cmd Command) error {
 			continue
 		}
 		result := failed("command_superseded", "La carga fue reemplazada por otra orden")
-		if err := r.journal.Record(id, &result); err != nil {
+		if err := r.completePending(id, pending, result); err != nil {
 			return err
 		}
 		delete(r.pending, id)
@@ -301,7 +308,7 @@ func (r *Runtime) finishPending(ctx context.Context, fresh bool) error {
 				result = Result{Outcome: "succeeded", CompletedAt: time.Now().UTC()}
 			}
 		}
-		if err := r.journal.Record(id, &result); err != nil {
+		if err := r.completePending(id, pending, result); err != nil {
 			return err
 		}
 		delete(r.pending, id)

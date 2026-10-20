@@ -23,4 +23,7 @@ func TestDesktopSnapshotIncludesStateWithoutSignedURLs(t *testing.T) {
 	if event.Report.Zones[0].State != "stopped" || event.Report.Zones[0].Volume != 50 {
 		t.Fatal("invalid zone state")
 	}
+	if len(event.Zones[0].Songs) != 1 || event.Zones[0].Songs[0] != "s" {
+		t.Fatal("assigned song IDs missing")
+	}
 }

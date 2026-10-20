@@ -19,7 +19,7 @@ import (
 	"time"
 )
 
-var version = "0.8.0"
+var version = "0.8.2"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -161,15 +161,17 @@ func run(args []string) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 	var observer func(control.DesktopEvent)
+	var requests chan control.DesktopRequest
 	if desktop {
 		observer = desktopObserver(os.Stdout)
-		go cancelOnDesktopClose(os.Stdin, cancel)
+		requests = make(chan control.DesktopRequest, 16)
+		go readDesktopInput(ctx, os.Stdin, cancel, requests, observer)
 	}
 	profile := control.PlaybackProfile
 	if cfg.Mode == "mono" {
 		profile = control.MonoProfile
 	}
-	err = control.RunProfileObserved(ctx, cfg.Server, token, version, filepath.Join(dir, "journal"), profile, output, observer)
+	err = control.RunProfileDesktop(ctx, cfg.Server, token, version, filepath.Join(dir, "journal"), profile, output, observer, requests)
 	if err != nil {
 		log.Printf("Error: %v", err)
 	}

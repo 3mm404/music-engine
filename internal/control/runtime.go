@@ -18,17 +18,20 @@ import (
 
 // Runtime synchronizes configuration, durable commands and observed zone state.
 type Runtime struct {
-	sharedStereo bool
-	client       *Client
-	journal      *Journal
-	deviceID     string
-	mu           sync.Mutex
-	config       Config
-	configError  *ConfigError
-	sequence     int64
-	audio        *engine.Manager
-	selected     map[string]int
-	pending      map[string]*pendingPlayback
+	observer       func(DesktopEvent)
+	desktopResults map[string]Result
+	localVolumes   map[string]int
+	sharedStereo   bool
+	client         *Client
+	journal        *Journal
+	deviceID       string
+	mu             sync.Mutex
+	config         Config
+	configError    *ConfigError
+	sequence       int64
+	audio          *engine.Manager
+	selected       map[string]int
+	pending        map[string]*pendingPlayback
 }
 
 func (r *Runtime) apply(c Config) error {
@@ -68,6 +71,9 @@ func (r *Runtime) apply(c Config) error {
 		if err := r.applyAudio(c); err != nil {
 			return err
 		}
+	}
+	if c.Revision != r.config.Revision {
+		r.localVolumes = nil
 	}
 	r.config = c
 	r.configError = nil
@@ -231,6 +237,10 @@ func RunProfileWithOutput(ctx context.Context, server, token, version, stateDir,
 }
 
 func RunProfileObserved(ctx context.Context, server, token, version, stateDir, profile string, output audio.Output, observer func(DesktopEvent)) error {
+	return RunProfileDesktop(ctx, server, token, version, stateDir, profile, output, observer, nil)
+}
+
+func RunProfileDesktop(ctx context.Context, server, token, version, stateDir, profile string, output audio.Output, observer func(DesktopEvent), requests <-chan DesktopRequest) error {
 	notify := func(channel string, err error) {
 		if observer != nil {
 			event := DesktopEvent{Type: "connection", Channel: channel, Connected: err == nil, At: time.Now().UTC()}
@@ -282,7 +292,7 @@ func RunProfileObserved(ctx context.Context, server, token, version, stateDir, p
 		return err
 	}
 	defer journal.Close()
-	r := &Runtime{client: client, journal: journal, deviceID: session.DeviceID, sharedStereo: audio.IsSharedStereo(output)}
+	r := &Runtime{client: client, journal: journal, deviceID: session.DeviceID, sharedStereo: audio.IsSharedStereo(output), observer: observer}
 	if profile == PlaybackProfile || profile == MonoProfile {
 		media := decoder.HTTPS{Client: &http.Client{Transport: client.http.Transport}}
 		if output == nil && profile == MonoProfile {
@@ -423,6 +433,12 @@ func RunProfileObserved(ctx context.Context, server, token, version, stateDir, p
 			return err
 		case <-wake:
 			timer.Stop()
+		case request := <-requests:
+			timer.Stop()
+			r.executeDesktop(request)
+			if observer != nil {
+				observer(r.desktopSnapshot())
+			}
 		case <-timer.C:
 		}
 	}

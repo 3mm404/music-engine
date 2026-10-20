@@ -12,8 +12,8 @@ import (
 	"strings"
 
 	"music-engine/internal/audio/backend"
-	"music-engine/internal/console"
 	"music-engine/internal/engine"
+	"music-engine/tools/local-demo/console"
 )
 
 func main() {
@@ -24,7 +24,7 @@ func main() {
 }
 
 func run() (result error) {
-	path := flag.String("file", "music/demo.mp3", "MP3 inicial de zona A")
+	path := flag.String("file", "tools/local-demo/demo.mp3", "MP3 inicial de zona A")
 	pathB := flag.String("file-b", "", "MP3 inicial de zona B; vacio inicia B detenida")
 	headless := flag.Bool("headless", false, "ejecutar sin consola hasta Ctrl+C")
 	flag.Parse()

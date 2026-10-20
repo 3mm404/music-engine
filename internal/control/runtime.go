@@ -3,9 +3,7 @@ package control
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log"
-	"math/rand/v2"
 	"music-engine/internal/audio"
 	"music-engine/internal/decoder"
 	"music-engine/internal/engine"
@@ -34,196 +32,6 @@ type Runtime struct {
 	pending        map[string]*pendingPlayback
 }
 
-func (r *Runtime) apply(c Config) error {
-	if c.DeviceID != r.deviceID || c.Revision < 1 || c.Zones == nil {
-		return errors.New("configuración inválida o equipo incorrecto")
-	}
-	seen := map[string]bool{}
-	for _, z := range c.Zones {
-		if z.ID == "" || seen[z.ID] || z.Volume < 0 || z.Volume > 100 || (z.ChannelMode != "mono" && z.ChannelMode != "stereo") {
-			return errors.New("zona inválida")
-		}
-		if r.audio == nil && z.Output != nil {
-			return errors.New("esta etapa no admite salidas de audio; configure output=null")
-		}
-		if z.Playlist != nil && (z.Playlist.ID == "" || z.Playlist.Songs == nil) {
-			return errors.New("playlist inválida")
-		}
-		seen[z.ID] = true
-	}
-	if r.audio != nil {
-		if r.client != nil && r.client.profile != "" && c.Profile != r.client.profile {
-			return errors.New("perfil diferente al negociado")
-		}
-		if err := validateAudioForOutput(c, r.sharedStereo); err != nil {
-			return err
-		}
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if c.Revision < r.config.Revision {
-		return errors.New("revisión regresiva")
-	}
-	if r.audio != nil {
-		if c.Revision == r.config.Revision && !sameSnapshot(c, r.config) {
-			return errors.New("contenido diferente para la misma revision")
-		}
-		if err := r.applyAudio(c); err != nil {
-			return err
-		}
-	}
-	if c.Revision != r.config.Revision {
-		r.localVolumes = nil
-	}
-	r.config = c
-	r.configError = nil
-	return nil
-}
-
-func (r *Runtime) report() Report {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.sequence++
-	report := Report{Sequence: r.sequence, ObservedAt: time.Now().UTC(), Revision: r.config.Revision, ConfigError: r.configError, Zones: []ZoneState{}}
-	for _, z := range r.config.Zones {
-		state := ZoneState{ZoneID: z.ID, State: "stopped", Volume: z.Volume, ChannelMode: &z.ChannelMode}
-		if z.Playlist != nil {
-			state.PlaylistID = &z.Playlist.ID
-		}
-		if r.audio != nil {
-			r.audioReport(z, &state)
-		}
-		report.Zones = append(report.Zones, state)
-	}
-	return report
-}
-
-func failed(code, message string) Result {
-	return Result{"failed", time.Now().UTC(), &Failure{code, message}}
-}
-
-func (r *Runtime) execute(cmd Command) Result {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if cmd.ExpiresAt.IsZero() || !cmd.ExpiresAt.After(time.Now()) {
-		return failed("command_expired", "Orden vencida")
-	}
-	var zone *Zone
-	for i := range r.config.Zones {
-		if r.config.Zones[i].ID == cmd.ZoneID {
-			zone = &r.config.Zones[i]
-			break
-		}
-	}
-	if zone == nil {
-		return failed("zone_not_assigned", "Zona no asignada")
-	}
-	if cmd.Revision != r.config.Revision {
-		return failed("config_revision_mismatch", "Revisión distinta de la aplicada")
-	}
-	if r.audio != nil {
-		if failure := validateSongSelection(cmd, zone); failure != nil {
-			return failed(failure.Code, failure.Message)
-		}
-		return r.executeAudio(cmd, zone)
-	}
-	if cmd.Action != "stop" {
-		return failed("unsupported_action", "Engine de configuración sin reproducción de audio")
-	}
-	return Result{Outcome: "succeeded", CompletedAt: time.Now().UTC()}
-}
-
-func (r *Runtime) cycle(ctx context.Context) error {
-	config, err := r.client.Configuration(ctx)
-	if err != nil {
-		return err
-	}
-	applyErr := r.apply(config)
-	if applyErr != nil {
-		r.mu.Lock()
-		if r.configError == nil || r.configError.Revision != config.Revision || r.configError.Message != applyErr.Error() {
-			log.Printf("Configuracion de audio rechazada (revision %d): %v", config.Revision, applyErr)
-		}
-		r.configError = &ConfigError{config.Revision, "unsupported_configuration", applyErr.Error()}
-		r.mu.Unlock()
-	}
-	if r.audio != nil {
-		if err := r.finishPending(ctx, applyErr == nil); err != nil {
-			return err
-		}
-	}
-	commands, err := r.client.Commands(ctx)
-	if err != nil {
-		return err
-	}
-	var previous int64
-	for _, cmd := range commands {
-		if cmd.ID == "" || cmd.Sequence <= previous {
-			return errors.New("lote de órdenes inválido")
-		}
-		previous = cmd.Sequence
-		result, seen := r.journal.results[cmd.ID]
-		if !seen {
-			if r.audio != nil {
-				if err := r.supersede(cmd); err != nil {
-					return err
-				}
-			}
-			if err := r.journal.Record(cmd.ID, nil); err != nil {
-				return fmt.Errorf("persistir inicio: %w", err)
-			}
-			executed := r.execute(cmd)
-			if executed.Outcome == "pending" {
-				continue
-			}
-			result = &executed
-			if err := r.journal.Record(cmd.ID, result); err != nil {
-				return fmt.Errorf("persistir resultado: %w", err)
-			}
-		} else if result == nil {
-			r.mu.Lock()
-			pending := r.pending[cmd.ID] != nil
-			r.mu.Unlock()
-			if pending {
-				continue
-			}
-			unknown := failed("execution_unknown", "El proceso terminó sin persistir el resultado; no se repite la acción")
-			result = &unknown
-			if err := r.journal.Record(cmd.ID, result); err != nil {
-				return err
-			}
-		}
-		if err := r.client.Confirm(ctx, cmd.ID, *result); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func wait(ctx context.Context, duration time.Duration) bool {
-	timer := time.NewTimer(duration)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return false
-	case <-timer.C:
-		return true
-	}
-}
-
-func delay(attempt int, err error) time.Duration {
-	d := time.Second * time.Duration(1<<min(attempt, 5))
-	if d > 30*time.Second {
-		d = 30 * time.Second
-	}
-	d += time.Duration(rand.Float64() * 0.2 * float64(d))
-	var api *APIError
-	if errors.As(err, &api) && api.RetryAfter > d {
-		d = api.RetryAfter
-	}
-	return d
-}
-
 func Run(ctx context.Context, server, token, version, stateDir string) error {
 	return RunProfile(ctx, server, token, version, stateDir, "configuration_only")
 }
@@ -240,6 +48,7 @@ func RunProfileObserved(ctx context.Context, server, token, version, stateDir, p
 	return RunProfileDesktop(ctx, server, token, version, stateDir, profile, output, observer, nil)
 }
 
+// RunProfileDesktop compone sesión, diario y audio; posee todos sus recursos y espera a los workers antes de cerrar.
 func RunProfileDesktop(ctx context.Context, server, token, version, stateDir, profile string, output audio.Output, observer func(DesktopEvent), requests <-chan DesktopRequest) error {
 	notify := func(channel string, err error) {
 		if observer != nil {
@@ -253,6 +62,7 @@ func RunProfileDesktop(ctx context.Context, server, token, version, stateDir, pr
 	if profile != "configuration_only" && profile != PlaybackProfile && profile != MonoProfile {
 		return errors.New("ENGINE_PROFILE invalido")
 	}
+	// 1. Preparación: cliente autenticado y bloqueo exclusivo del directorio de estado.
 	client, err := NewClient(server, token)
 	if err != nil {
 		return err
@@ -269,6 +79,7 @@ func RunProfileDesktop(ctx context.Context, server, token, version, stateDir, pr
 	if err := lockJournal(processLock); err != nil {
 		return errors.New("ya hay un engine usando ENGINE_STATE_DIR")
 	}
+	// 2. Sesión: reintenta errores recuperables y termina ante rechazo definitivo.
 	var session Session
 	for attempt := 0; ; attempt++ {
 		session, err = client.Open(ctx, version)
@@ -287,6 +98,7 @@ func RunProfileDesktop(ctx context.Context, server, token, version, stateDir, pr
 			return nil
 		}
 	}
+	// 3. Recursos de ejecución: diario durable y reproductores por zona.
 	journal, err := OpenJournal(stateDir, client.base+"|"+session.DeviceID)
 	if err != nil {
 		return err
@@ -311,6 +123,8 @@ func RunProfileDesktop(ctx context.Context, server, token, version, stateDir, pr
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	// 4. Workers: observación Desktop, cambios de audio, heartbeat y WebSocket.
+	// Solo el bucle principal procesa ciclos del servidor y órdenes locales.
 	fatal := make(chan error, 2)
 	wake := make(chan struct{}, 1)
 	reportNow := make(chan struct{}, 1)
@@ -396,6 +210,7 @@ func RunProfileDesktop(ctx context.Context, server, token, version, stateDir, pr
 	if session.WebSocket != nil {
 		workers.Go(func() { client.watch(ctx, *session.WebSocket, wake, fatal) })
 	}
+	// 5. Bucle principal: sincronización, errores y despacho local serializado.
 	log.Printf("Engine %s conectado; perfil %s", session.DeviceID, profile)
 	for attempt := 0; ; {
 		err := r.cycle(ctx)

@@ -169,6 +169,7 @@ func (p *Player) cancelLoadLocked() {
 	p.loading = ""
 }
 
+// startRemoteLocked inicia una carga cancelable. La generación evita instalar audio obsoleto después de Stop o de otra selección; requiere p.mu.
 func (p *Player) startRemoteLocked(path, hash string) error {
 	p.cancelLoadLocked()
 	if err := p.stopLocked(); err != nil {
@@ -275,6 +276,7 @@ func (p *Player) Stop() error {
 	return p.stopLocked()
 }
 
+// stopLocked cancela la carga y libera stream/salida de la pista; requiere p.mu. No cierra el backend compartido de otras zonas.
 func (p *Player) stopLocked() error {
 	if p.audio == nil {
 		return nil

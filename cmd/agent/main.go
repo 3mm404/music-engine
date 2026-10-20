@@ -19,7 +19,7 @@ import (
 	"time"
 )
 
-var version = "0.8.2"
+var version = "0.8.3"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -27,6 +27,8 @@ func main() {
 		os.Exit(1)
 	}
 }
+
+// run es la raíz de composición: interpreta comandos, carga credenciales, selecciona backend y arranca control. No contiene lógica de playlists.
 func run(args []string) error {
 	command := "run"
 	if len(args) > 0 {

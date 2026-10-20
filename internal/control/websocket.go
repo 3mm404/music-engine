@@ -86,7 +86,7 @@ func (c *Client) subscribe(ctx context.Context, config WebSocketConfig, wake cha
 	var auth struct {
 		Auth string `json:"auth"`
 	}
-	err = c.request(ctx, "POST", "/broadcasting/auth", map[string]string{"socket_id": hello.SocketID, "channel_name": config.Channel}, &auth, false)
+	err = c.request(ctx, "POST", apiBroadcastAuth, map[string]string{"socket_id": hello.SocketID, "channel_name": config.Channel}, &auth, false)
 	if err != nil {
 		return err
 	}

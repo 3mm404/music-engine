@@ -1,0 +1,5 @@
+{
+  "files.exclude": {
+    "**/*_test.go": true
+  }
+}

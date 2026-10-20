@@ -83,6 +83,7 @@ func NewRemoteMonoWithOutput(output audio.Output, source decoder.HTTPS) (*Manage
 }
 
 // Reconfigure changes membership, retaining every unchanged zone and its audio.
+// Reconfigure valida rutas y cambia la pertenencia de zonas. El Manager posee su ciclo de vida; la configuración de negocio pertenece a control.
 func (m *Manager) Reconfigure(configs []ZoneConfig) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

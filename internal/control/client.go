@@ -60,7 +60,7 @@ func NewClient(server, token string) (*Client, error) {
 		}
 		transport.TLSClientConfig = &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}
 	}
-	return &Client{base: strings.TrimRight(server, "/") + "/api/v1/engine", token: token,
+	return &Client{base: strings.TrimRight(server, "/") + engineAPIPrefix, token: token,
 		http: &http.Client{Transport: transport, Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
 }
 
@@ -118,7 +118,7 @@ func (c *Client) Open(ctx context.Context, version string) (Session, error) {
 	if profile == "" {
 		profile = "configuration_only"
 	}
-	err := c.request(ctx, "POST", "/sessions", map[string]any{"engine_version": version, "capabilities": []string{profile}}, &s, true)
+	err := c.request(ctx, "POST", apiSessions, map[string]any{"engine_version": version, "capabilities": []string{profile}}, &s, true)
 	if err == nil {
 		if s.DeviceID == "" || s.SessionID == "" || s.HeartbeatSeconds < 1 || s.PollSeconds < 1 {
 			return s, errors.New("sesión inválida")
@@ -130,17 +130,17 @@ func (c *Client) Open(ctx context.Context, version string) (Session, error) {
 
 func (c *Client) Configuration(ctx context.Context) (Config, error) {
 	var config Config
-	err := c.request(ctx, "GET", "/config", nil, &config, true)
+	err := c.request(ctx, "GET", apiConfiguration, nil, &config, true)
 	return config, err
 }
 func (c *Client) Commands(ctx context.Context) ([]Command, error) {
 	var commands []Command
-	err := c.request(ctx, "GET", "/commands", nil, &commands, true)
+	err := c.request(ctx, "GET", apiCommands, nil, &commands, true)
 	return commands, err
 }
 func (c *Client) Confirm(ctx context.Context, id string, result Result) error {
-	return c.request(ctx, "PUT", "/commands/"+url.PathEscape(id)+"/result", result, nil, true)
+	return c.request(ctx, "PUT", apiCommands+"/"+url.PathEscape(id)+"/result", result, nil, true)
 }
 func (c *Client) Heartbeat(ctx context.Context, report Report) error {
-	return c.request(ctx, "POST", "/heartbeat", report, nil, true)
+	return c.request(ctx, "POST", apiHeartbeat, report, nil, true)
 }

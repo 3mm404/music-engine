@@ -42,5 +42,5 @@ func DesktopCapabilities() []string {
 	for _, operation := range desktopOperations {
 		capabilities = append(capabilities, operation.name)
 	}
-	return append(capabilities, "playlist_read", "schedule_read")
+	return append(capabilities, "playlist_read")
 }

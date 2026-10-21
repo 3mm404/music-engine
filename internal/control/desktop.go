@@ -45,7 +45,6 @@ func (r *Runtime) desktopSnapshot() DesktopEvent {
 		}
 		desktopZone := DesktopZone{ID: zone.ID, Name: zone.Name, Playlist: name, Songs: songs,
 			SongMetadata: metadata, Shuffle: zone.Shuffle, RepeatMode: zone.RepeatMode, ContinuousPlayback: zone.ContinuousPlayback}
-		desktopZone.Schedule = cloneSchedule(zone.Schedule)
 		if r.audio != nil {
 			if player, err := r.audio.Zone(zone.ID); err == nil {
 				state := player.GetState()

@@ -33,27 +33,6 @@ type Zone struct {
 	Shuffle            bool      `json:"shuffle"`
 	RepeatMode         string    `json:"repeat_mode"`
 	ContinuousPlayback bool      `json:"continuous_playback"`
-	Schedule           *Schedule `json:"schedule"`
-}
-
-// Schedule is descriptive. Laravel remains the sole scheduler and command authority.
-type Schedule struct {
-	ID               string         `json:"schedule_id"`
-	Name             string         `json:"name"`
-	Timezone         string         `json:"timezone"`
-	StopOutsideSlots bool           `json:"stop_outside_slots"`
-	Slots            []ScheduleSlot `json:"slots"`
-}
-
-type ScheduleSlot struct {
-	ID              string `json:"slot_id"`
-	Days            []int  `json:"days"`
-	StartsAt        string `json:"starts_at"`
-	EndsAt          string `json:"ends_at"`
-	CrossesMidnight bool   `json:"crosses_midnight"`
-	PlaylistID      string `json:"playlist_id"`
-	PlaylistName    string `json:"playlist_name"`
-	Volume          *int   `json:"volume"`
 }
 
 type Output struct {

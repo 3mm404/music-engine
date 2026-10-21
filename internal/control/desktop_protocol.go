@@ -26,7 +26,6 @@ type DesktopZone struct {
 	Shuffle            bool          `json:"shuffle"`
 	RepeatMode         string        `json:"repeat_mode"`
 	ContinuousPlayback bool          `json:"continuous_playback"`
-	Schedule           *Schedule     `json:"schedule"`
 }
 
 // DesktopSong exposes display metadata without private audio URLs or grants.

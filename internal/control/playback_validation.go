@@ -31,9 +31,6 @@ func sameSnapshot(a, b Config) bool {
 	}
 	for i, z := range a.Zones {
 		other := b.Zones[i]
-		if !reflect.DeepEqual(z.Schedule, other.Schedule) {
-			return false
-		}
 		if z.ID != other.ID || z.Name != other.Name || z.Volume != other.Volume || z.ChannelMode != other.ChannelMode || !reflect.DeepEqual(z.Output, other.Output) || !samePlaylist(z.Playlist, other.Playlist) {
 			return false
 		}

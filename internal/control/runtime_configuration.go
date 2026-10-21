@@ -9,9 +9,6 @@ func (r *Runtime) apply(c Config) error {
 	}
 	seen := map[string]bool{}
 	for _, z := range c.Zones {
-		if err := validateSchedule(z.Schedule); err != nil {
-			return err
-		}
 		if z.RepeatMode != "" && z.RepeatMode != "off" && z.RepeatMode != "track" && z.RepeatMode != "playlist" {
 			return errors.New("repeat_mode inválido")
 		}

@@ -259,6 +259,15 @@ func (z *Zone) Resume() error   { return z.apply(playback.Resume) }
 func (z *Zone) Stop() error     { return z.apply(playback.Stop) }
 func (z *Zone) Next() error     { return z.apply(playback.Next) }
 func (z *Zone) Previous() error { return z.apply(playback.Previous) }
+func (z *Zone) SeekMS(position int) error {
+	return z.apply(func(p playback) error {
+		seeker, ok := p.(interface{ SeekMS(int) error })
+		if !ok {
+			return errors.New("reproductor sin busqueda temporal")
+		}
+		return seeker.SeekMS(position)
+	})
+}
 func (z *Zone) SetVolume(v float64) error {
 	return z.apply(func(p playback) error { return p.SetVolume(v) })
 }

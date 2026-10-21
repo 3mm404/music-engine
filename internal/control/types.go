@@ -24,12 +24,15 @@ type Config struct {
 }
 
 type Zone struct {
-	ID          string    `json:"zone_id"`
-	Name        string    `json:"name"`
-	Volume      int       `json:"volume"`
-	ChannelMode string    `json:"channel_mode"`
-	Output      *Output   `json:"output"`
-	Playlist    *Playlist `json:"playlist"`
+	ID                 string    `json:"zone_id"`
+	Name               string    `json:"name"`
+	Volume             int       `json:"volume"`
+	ChannelMode        string    `json:"channel_mode"`
+	Output             *Output   `json:"output"`
+	Playlist           *Playlist `json:"playlist"`
+	Shuffle            bool      `json:"shuffle"`
+	RepeatMode         string    `json:"repeat_mode"`
+	ContinuousPlayback bool      `json:"continuous_playback"`
 }
 
 type Output struct {
@@ -45,6 +48,8 @@ type Playlist struct {
 
 type Song struct {
 	ID             string      `json:"song_id"`
+	Title          string      `json:"title"`
+	Artist         *string     `json:"artist"`
 	URL            string      `json:"audio_url"`
 	ContentVersion string      `json:"content_version"`
 	Format         AudioFormat `json:"format"`
@@ -86,6 +91,7 @@ type ConfigError struct {
 }
 
 type ZoneState struct {
+	StopReason  string   `json:"stop_reason,omitempty"`
 	ZoneID      string   `json:"zone_id"`
 	State       string   `json:"state"`
 	PlaylistID  *string  `json:"playlist_id"`

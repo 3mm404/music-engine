@@ -9,6 +9,9 @@ func (r *Runtime) apply(c Config) error {
 	}
 	seen := map[string]bool{}
 	for _, z := range c.Zones {
+		if z.RepeatMode != "" && z.RepeatMode != "off" && z.RepeatMode != "track" && z.RepeatMode != "playlist" {
+			return errors.New("repeat_mode inválido")
+		}
 		if z.ID == "" || seen[z.ID] || z.Volume < 0 || z.Volume > 100 || (z.ChannelMode != "mono" && z.ChannelMode != "stereo") {
 			return errors.New("zona inválida")
 		}

@@ -34,6 +34,20 @@ func sameSnapshot(a, b Config) bool {
 		if z.ID != other.ID || z.Name != other.Name || z.Volume != other.Volume || z.ChannelMode != other.ChannelMode || !reflect.DeepEqual(z.Output, other.Output) || !samePlaylist(z.Playlist, other.Playlist) {
 			return false
 		}
+		if z.Shuffle != other.Shuffle || z.RepeatMode != other.RepeatMode || z.ContinuousPlayback != other.ContinuousPlayback {
+			return false
+		}
+		if z.Playlist != nil {
+			if z.Playlist.Name != other.Playlist.Name {
+				return false
+			}
+			for j, song := range z.Playlist.Songs {
+				otherSong := other.Playlist.Songs[j]
+				if song.Title != otherSong.Title || !reflect.DeepEqual(song.Artist, otherSong.Artist) {
+					return false
+				}
+			}
+		}
 	}
 	return true
 }

@@ -7,6 +7,8 @@ type desktopHandlerKind int
 const (
 	playbackHandler desktopHandlerKind = iota
 	volumeHandler
+	seekHandler
+	modesHandler
 )
 
 type desktopOperation struct {
@@ -22,6 +24,8 @@ var desktopOperations = []desktopOperation{
 	{"next", playbackHandler},
 	{"previous", playbackHandler},
 	{"volume", volumeHandler},
+	{"seek", seekHandler},
+	{"playback_modes", modesHandler},
 }
 
 func findDesktopOperation(name string) (desktopOperation, bool) {

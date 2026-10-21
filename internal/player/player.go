@@ -34,6 +34,7 @@ type Player struct {
 	current      string
 	volume       float64
 	lastError    error
+	stopReason   string
 	remote       decoder.HTTPS
 	cancel       context.CancelFunc
 	generation   uint64
@@ -144,6 +145,7 @@ func (p *Player) installLocked(path string, source *decoder.Stream) error {
 	p.progress = progress
 	p.positionMS, p.durationMS = progress.times()
 	p.current, p.index, p.lastError = path, -1, nil
+	p.stopReason = ""
 	for i, track := range p.tracks {
 		if track == path {
 			p.index = i
@@ -187,6 +189,7 @@ func (p *Player) startRemoteLocked(path, hash string) error {
 	p.cancel = cancel
 	generation := p.generation
 	p.current, p.index, p.lastError, p.loading = path, -1, nil, "LOADING"
+	p.stopReason = ""
 	for i, track := range p.tracks {
 		if path == track {
 			p.index = i
@@ -275,12 +278,70 @@ func (p *Player) Resume() error {
 	return nil
 }
 
+// SeekMS rebuilds only this zone's output to discard buffered PCM and preserves pause/volume.
+func (p *Player) SeekMS(position int) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.audio == nil || p.stream == nil || p.loading != "" {
+		return ErrNoTrack
+	}
+	length, rate := p.stream.Length(), p.stream.SampleRate()
+	if position < 0 || length <= 0 || int64(position) > length*1000/(int64(rate)*4) {
+		return errors.New("posicion fuera de la duracion de la cancion")
+	}
+	paused := p.paused
+	p.audio.Pause()
+	if closer, ok := p.audio.(interface{ Close() error }); ok {
+		if err := closer.Close(); err != nil {
+			return err
+		}
+	}
+	p.audio = nil
+	installed := false
+	defer func() {
+		if !installed {
+			p.stream.Close()
+			p.stream, p.progress, p.paused = nil, nil, false
+		}
+	}()
+	offset := int64(position) * int64(rate) * 4 / 1000
+	offset -= offset % 4
+	if offset >= length {
+		offset = length - 4
+	}
+	actual, err := p.stream.Seek(offset, io.SeekStart)
+	if err != nil {
+		p.lastError = err
+		return err
+	}
+	var pcm io.Reader = p.stream
+	if p.mono {
+		pcm = &monoReader{source: p.stream}
+	}
+	progress := &pcmProgress{rate: rate, length: length}
+	progress.bytes.Store(actual)
+	stream, err := p.output.Open(&progressReader{source: pcm, progress: progress}, audio.PCMFormat{SampleRate: rate, Channels: 2, SampleFormat: audio.SignedInt16LE})
+	if err != nil {
+		p.lastError = err
+		return err
+	}
+	p.audio, p.progress, p.paused, p.lastError = stream, progress, paused, nil
+	installed = true
+	p.positionMS, p.durationMS = progress.times()
+	stream.SetVolume(p.volume)
+	if !paused {
+		stream.Play()
+	}
+	return nil
+}
+
 // Stop es idempotente y descarga el archivo. Para reiniciar, vuelve a llamar Play.
 func (p *Player) Stop() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.cancelLoadLocked()
 	p.lastError = nil
+	p.stopReason = "manual"
 	err := p.stopLocked()
 	if p.positionMS != nil {
 		zero := 0
@@ -375,6 +436,7 @@ type State struct {
 	Error      error
 	PositionMS *int
 	DurationMS *int
+	StopReason string
 }
 
 // GetState tambien detecta EOF y libera el archivo, sin avanzar automaticamente.
@@ -383,6 +445,10 @@ func (p *Player) GetState() State {
 	defer p.mu.Unlock()
 	if p.audio != nil && (p.audio.Err() != nil || (!p.paused && !p.audio.IsPlaying())) {
 		p.lastError = p.stopLocked()
+		p.stopReason = "ended"
+		if p.lastError != nil {
+			p.stopReason = "error"
+		}
 	}
 	status := "STOPPED"
 	if p.lastError != nil {
@@ -408,7 +474,7 @@ func (p *Player) GetState() State {
 	if p.progress != nil {
 		position, duration = p.progress.times()
 	}
-	return State{Status: status, Track: track, Index: p.index, Total: len(p.tracks), Volume: p.volume, Error: p.lastError, PositionMS: position, DurationMS: duration}
+	return State{Status: status, Track: track, Index: p.index, Total: len(p.tracks), Volume: p.volume, Error: p.lastError, PositionMS: position, DurationMS: duration, StopReason: p.stopReason}
 }
 
 // SetVolume conserva la ganancia para pistas futuras, incluso estando detenido.

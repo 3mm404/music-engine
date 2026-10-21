@@ -36,12 +36,15 @@ func (r *Runtime) desktopSnapshot() DesktopEvent {
 			name = zone.Playlist.Name
 		}
 		songs := []string{}
+		metadata := []DesktopSong{}
 		if zone.Playlist != nil {
 			for _, song := range zone.Playlist.Songs {
 				songs = append(songs, song.ID)
+				metadata = append(metadata, DesktopSong{ID: song.ID, Title: song.Title, Artist: song.Artist})
 			}
 		}
-		desktopZone := DesktopZone{ID: zone.ID, Name: zone.Name, Playlist: name, Songs: songs}
+		desktopZone := DesktopZone{ID: zone.ID, Name: zone.Name, Playlist: name, Songs: songs,
+			SongMetadata: metadata, Shuffle: zone.Shuffle, RepeatMode: zone.RepeatMode, ContinuousPlayback: zone.ContinuousPlayback}
 		if r.audio != nil {
 			if player, err := r.audio.Zone(zone.ID); err == nil {
 				state := player.GetState()

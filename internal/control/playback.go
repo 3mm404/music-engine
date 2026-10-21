@@ -234,6 +234,7 @@ func (r *Runtime) finishPending(ctx context.Context, fresh bool) error {
 func (r *Runtime) audioReport(z Zone, state *ZoneState) {
 	p, _ := r.audio.Zone(z.ID)
 	s := p.GetState()
+	state.StopReason = s.StopReason
 	state.State = strings.ToLower(s.Status)
 	state.Output = z.Output
 	if z.Playlist != nil && len(z.Playlist.Songs) > 0 {

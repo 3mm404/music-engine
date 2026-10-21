@@ -26,8 +26,26 @@ func (r *Runtime) executeDesktop(request DesktopRequest) {
 		r.desktopResult(request.RequestID, result)
 		return
 	}
+	if (operation.handler != seekHandler && request.PositionMS != nil) ||
+		(operation.handler != modesHandler && (request.Shuffle != nil || request.RepeatMode != nil || request.ContinuousPlayback != nil)) {
+		result := failed("invalid_parameters", "Parametros ajenos a la operacion")
+		r.desktopResults[request.RequestID] = result
+		r.desktopResult(request.RequestID, result)
+		return
+	}
 	if operation.handler == volumeHandler {
 		result := r.setDesktopVolume(request)
+		r.desktopResults[request.RequestID] = result
+		r.desktopResult(request.RequestID, result)
+		return
+	}
+	if operation.handler == seekHandler || operation.handler == modesHandler {
+		var result Result
+		if operation.handler == seekHandler {
+			result = r.seekDesktop(request)
+		} else {
+			result = r.setDesktopModes(request)
+		}
 		r.desktopResults[request.RequestID] = result
 		r.desktopResult(request.RequestID, result)
 		return

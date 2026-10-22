@@ -102,10 +102,19 @@ func validateAudioForOutput(c Config, shared bool) error {
 				return errors.New("cancion o URL HTTPS invalida")
 			}
 			seen[s.ID] = true
-			if s.Format.Container != "mp3" || s.Format.Codec != "mp3" || s.Format.Mime != "audio/mpeg" || s.Format.Rate != 44100 || (s.Format.Channels != 1 && s.Format.Channels != 2) {
-				return errors.New("unsupported_format: requiere MP3 44100 Hz")
+			if s.Format.Container != "mp3" || s.Format.Codec != "mp3" || s.Format.Mime != "audio/mpeg" || !validMP3Rate(s.Format.Rate) || (s.Format.Channels != 1 && s.Format.Channels != 2) {
+				return errors.New("unsupported_format: requiere MP3 con frecuencia de muestreo válida y uno o dos canales")
 			}
 		}
 	}
 	return nil
+}
+
+func validMP3Rate(rate int) bool {
+	switch rate {
+	case 8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000:
+		return true
+	default:
+		return false
+	}
 }

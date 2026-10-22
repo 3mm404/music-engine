@@ -1,4 +1,4 @@
-# UtrackSound beta 0.8.4 — Windows x64
+# UtrackSound beta 0.8.8 — Windows x64
 
 Distribuye engine.exe y esta guia. No requiere Go ni PowerShell como lanzador: PowerShell o Terminal solo sirven para introducir comandos. Configuracion, credencial DPAPI, diario y logs siguen en `%ProgramData%\UtrackSound`.
 
@@ -11,7 +11,7 @@ Distribuye engine.exe y esta guia. No requiere Go ni PowerShell como lanzador: P
 .\engine.exe run
 ```
 
-No requiere ASIO. Todas las zonas se mezclan en la misma salida estereo del sistema, manteniendo controles de transporte y volumen por zona. No permite seleccionar dispositivos independientes ni asignar canales fisicos multizona. El agente procesa MP3 44100 Hz; la frecuencia del contexto Oto deriva del audio, sin controles ASIO. La ayuda `configure --backend oto --help` muestra solo sus parametros; se rechazan flags ASIO.
+No requiere ASIO. Todas las zonas se mezclan en la misma salida estereo del sistema, manteniendo controles de transporte y volumen por zona. No permite seleccionar dispositivos independientes ni asignar canales fisicos multizona. El agente procesa MP3 MPEG-1/2/2.5 a 8, 11.025, 12, 16, 22.05, 24, 32, 44.1 y 48 kHz. Cada pista se remuestrea en memoria a un reloj común de 44100 Hz con filtro antialias; Oto conserva ese contexto entre canciones y zonas. ASIO adapta después al reloj configurado del dispositivo. No se usa FFmpeg ni se modifica el MP3. 36 y 40 kHz no son frecuencias MP3 válidas. La ayuda `configure --backend oto --help` muestra solo sus parametros; se rechazan flags ASIO.
 
 La configuracion enviada por Laravel debe usar `output=null` o salida `default` con `[1,2]` para estereo / `[1]` para mono. Estos valores representan la mezcla compartida, no salidas aisladas. Se rechazan rutas 3–4, 5–6, dispositivos distintos y asignaciones no compatibles. Si el panel/servidor exige canales exclusivos entre zonas, debe adaptarse alli para poder guardar multiples zonas compartidas; este cambio del engine no modifica Laravel ni ignora sus rutas.
 

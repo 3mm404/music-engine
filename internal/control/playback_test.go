@@ -243,7 +243,7 @@ func TestAudioConfigurationIsAtomicAndRemovesZones(t *testing.T) {
 	}
 	bad := audioConfig(s.URL, nil)
 	bad.Revision = 2
-	bad.Zones[0].Playlist.Songs[0].Format.Rate = 48000
+	bad.Zones[0].Playlist.Songs[0].Format.Rate = 0
 	if r.apply(bad) == nil || r.report().Revision != 1 {
 		t.Fatal("unsupported config partially applied")
 	}
@@ -319,4 +319,21 @@ func TestPlaybackRecoveryAndTransportIntegration(t *testing.T) {
 		}
 	}
 	awaitAudio(t, r, "stopped")
+}
+
+func TestValidateAudioAcceptsAllStandardMP3Rates(t *testing.T) {
+	for _, rate := range []int{8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000} {
+		c := audioConfig("https://audio.example.test/song.mp3", nil)
+		c.Zones[0].Playlist.Songs[0].Format.Rate = rate
+		if err := validateAudio(c); err != nil {
+			t.Fatalf("%d Hz rejected: %v", rate, err)
+		}
+	}
+	for _, rate := range []int{0, -1, 36000, 40000, 96000} {
+		c := audioConfig("https://audio.example.test/song.mp3", nil)
+		c.Zones[0].Playlist.Songs[0].Format.Rate = rate
+		if err := validateAudio(c); err == nil {
+			t.Fatalf("non-MP3 rate %d accepted", rate)
+		}
+	}
 }

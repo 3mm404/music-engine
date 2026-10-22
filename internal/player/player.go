@@ -24,37 +24,40 @@ const playbackCompletionGrace = 100 * time.Millisecond
 
 // Player conserva el stream mientras la salida de audio lo consume. Sus metodos admiten concurrencia.
 type Player struct {
-	mu           sync.Mutex
-	stream       *decoder.Stream
-	output       audio.Output
-	audio        audio.Stream
-	paused       bool
-	tracks       []string
-	index        int
-	current      string
-	volume       float64
-	lastError    error
-	stopReason   string
-	remote       decoder.HTTPS
-	cancel       context.CancelFunc
-	generation   uint64
-	loading      string
-	jobs         sync.WaitGroup
-	expectedRate int
-	mono         bool
-	progress     *pcmProgress
-	positionMS   *int
-	durationMS   *int
+	mu         sync.Mutex
+	stream     *decoder.Stream
+	output     audio.Output
+	audio      audio.Stream
+	paused     bool
+	tracks     []string
+	index      int
+	current    string
+	volume     float64
+	lastError  error
+	stopReason string
+	remote     decoder.HTTPS
+	cancel     context.CancelFunc
+	generation uint64
+	loading    string
+	jobs       sync.WaitGroup
+	outputRate int
+	mono       bool
+	progress   *pcmProgress
+	positionMS *int
+	durationMS *int
 }
 
-// NewRemote fixes the rate promised in configuration and permits a trusted HTTP transport.
+// NewRemote selects a stable output rate; source MP3 rates are resampled when needed.
 func NewRemote(rate int, source decoder.HTTPS) *Player {
 	return NewRemoteWithOutput(otooutput.NewOutput(), rate, source)
 }
 
 func NewRemoteWithOutput(output audio.Output, rate int, source decoder.HTTPS) *Player {
 	p := NewWithOutput(output)
-	p.expectedRate, p.remote = rate, source
+	if rate > 0 {
+		p.outputRate = rate
+	}
+	p.remote = source
 	return p
 }
 
@@ -75,7 +78,7 @@ func New(paths ...string) *Player {
 
 func NewWithOutput(output audio.Output, paths ...string) *Player {
 	tracks := append([]string(nil), paths...)
-	return &Player{output: output, tracks: tracks, index: -1, volume: 1}
+	return &Player{output: output, tracks: tracks, index: -1, volume: 1, outputRate: 44100}
 }
 
 // Play abre el archivo e inicia audio en segundo plano. Wait permite esperar el final.
@@ -117,18 +120,14 @@ func (p *Player) playLocked(path string) error {
 }
 
 func (p *Player) installLocked(path string, source *decoder.Stream) error {
-	if p.expectedRate != 0 && source.SampleRate() != p.expectedRate {
-		source.Close()
-		return errors.New("frecuencia MP3 distinta de la configuracion")
-	}
 	var pcm io.Reader = source
 	if p.mono {
 		pcm = &monoReader{source: source}
 	}
 	progress := &pcmProgress{rate: source.SampleRate(), length: source.Length()}
-	pcm = &progressReader{source: pcm, progress: progress}
+	pcm = resamplePCM(&progressReader{source: pcm, progress: progress}, source.SampleRate(), p.outputRate)
 	stream, err := p.output.Open(pcm, audio.PCMFormat{
-		SampleRate:   source.SampleRate(),
+		SampleRate:   p.outputRate,
 		Channels:     2,
 		SampleFormat: audio.SignedInt16LE,
 	})
@@ -320,7 +319,7 @@ func (p *Player) SeekMS(position int) error {
 	}
 	progress := &pcmProgress{rate: rate, length: length}
 	progress.bytes.Store(actual)
-	stream, err := p.output.Open(&progressReader{source: pcm, progress: progress}, audio.PCMFormat{SampleRate: rate, Channels: 2, SampleFormat: audio.SignedInt16LE})
+	stream, err := p.output.Open(resamplePCM(&progressReader{source: pcm, progress: progress}, rate, p.outputRate), audio.PCMFormat{SampleRate: p.outputRate, Channels: 2, SampleFormat: audio.SignedInt16LE})
 	if err != nil {
 		p.lastError = err
 		return err

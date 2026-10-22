@@ -6,6 +6,7 @@ require (
 	github.com/ebitengine/oto/v3 v3.5.1
 	github.com/gorilla/websocket v1.5.3
 	github.com/hajimehoshi/go-mp3 v0.3.4
+	github.com/tphakala/go-mp3 v0.1.0
 	golang.org/x/sys v0.47.0
 )
 

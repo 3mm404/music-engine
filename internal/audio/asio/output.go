@@ -85,6 +85,12 @@ func AvailableDrivers() ([]string, error) {
 	return availableDriverNames()
 }
 
+// RoutingChannels lets the mixer reserve the configured output width before
+// the first zone starts, so later routes do not change the PCM frame layout.
+func (o *Output) RoutingChannels() int {
+	return o.config.Channels
+}
+
 func (o *Output) Open(source io.Reader, format audio.PCMFormat) (opened audio.Stream, openErr error) {
 	defer func() {
 		if openErr != nil {

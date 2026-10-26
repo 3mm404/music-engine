@@ -109,11 +109,14 @@ func (r *Router) Configure(routes []Route) error {
 		return errors.New("no se puede activar routing despues de abrir una salida directa")
 	}
 	if r.output != nil {
-		if len(configured) > 0 && maxChannels != r.format.Channels {
+		if maxChannels > r.format.Channels {
 			return errors.New("no se puede cambiar la cantidad de canales despues de abrir el backend")
 		}
-		if len(configured) == 0 {
-			maxChannels = r.format.Channels
+		maxChannels = r.format.Channels
+	} else if capacity, ok := r.backend.(interface{ RoutingChannels() int }); ok {
+		channels := capacity.RoutingChannels()
+		if channels > maxChannels && channels <= maxOutputChannels {
+			maxChannels = channels
 		}
 	}
 	r.routes = configured

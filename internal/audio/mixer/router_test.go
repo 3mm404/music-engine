@@ -317,3 +317,44 @@ func pcmBytes(samples ...int16) []byte {
 	}
 	return data
 }
+
+// A configured ASIO device may have more outputs than the first active route.
+type reservedOutput struct {
+	captureOutput
+}
+
+func (o *reservedOutput) RoutingChannels() int { return 4 }
+
+func TestAddZoneAfterPlaybackStartsWithinReservedChannels(t *testing.T) {
+	backend := &reservedOutput{}
+	router := New(backend)
+	defer router.Close()
+	if err := router.Configure([]Route{{ZoneID: "A", Channels: []int{1}}}); err != nil {
+		t.Fatal(err)
+	}
+	a := openZone(t, router, "A", pcm(100, 200, 300), 1)
+	a.Play()
+	if got := backend.readFrame(t); !equalSamples(got, []int16{100, 0, 0, 0}) {
+		t.Fatalf("initial frame: %v", got)
+	}
+	if err := router.Configure([]Route{{ZoneID: "A", Channels: []int{1}}, {ZoneID: "B", Channels: []int{2}}}); err != nil {
+		t.Fatal(err)
+	}
+	b := openZone(t, router, "B", pcm(400), 1)
+	b.Play()
+	if got := backend.readFrame(t); !equalSamples(got, []int16{200, 400, 0, 0}) {
+		t.Fatalf("simultaneous frame: %v", got)
+	}
+	if err := router.Configure([]Route{{ZoneID: "A", Channels: []int{1}}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := backend.readFrame(t); !equalSamples(got, []int16{300, 0, 0, 0}) {
+		t.Fatalf("removed route frame: %v", got)
+	}
+	if err := router.Configure([]Route{{ZoneID: "A", Channels: []int{5}}}); err == nil {
+		t.Fatal("accepted route beyond reserved channels")
+	}
+	if backend.calls != 1 {
+		t.Fatalf("backend opened %d times", backend.calls)
+	}
+}

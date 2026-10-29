@@ -26,12 +26,19 @@ type Client struct {
 }
 
 type APIError struct {
+	Message    string
 	Status     int
 	Code       string
 	RetryAfter time.Duration
 }
 
-func (e *APIError) Error() string { return fmt.Sprintf("engine API: HTTP %d (%s)", e.Status, e.Code) }
+func (e *APIError) Error() string {
+	message := fmt.Sprintf("engine API: HTTP %d (%s)", e.Status, e.Code)
+	if e.Message != "" {
+		message += ": " + e.Message
+	}
+	return message
+}
 func terminal(err error) bool {
 	var e *APIError
 	return errors.As(err, &e) && e.Status >= 400 && e.Status < 500 && e.Status != 429
@@ -89,12 +96,20 @@ func (c *Client) request(ctx context.Context, method, path string, body, target 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		var data struct {
 			Error struct {
-				Code string `json:"code"`
+				Code    string `json:"code"`
+				Message string `json:"message"`
+				Details []struct {
+					Message string `json:"message"`
+				} `json:"details"`
 			} `json:"error"`
 		}
 		_ = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&data)
 		seconds, _ := strconv.Atoi(resp.Header.Get("Retry-After"))
-		return &APIError{resp.StatusCode, data.Error.Code, time.Duration(seconds) * time.Second}
+		message := data.Error.Message
+		if len(data.Error.Details) > 0 {
+			message = data.Error.Details[0].Message
+		}
+		return &APIError{Status: resp.StatusCode, Code: data.Error.Code, RetryAfter: time.Duration(seconds) * time.Second, Message: message}
 	}
 	if target == nil {
 		return nil

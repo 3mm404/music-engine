@@ -26,7 +26,9 @@ func (r *Runtime) executeDesktop(request DesktopRequest) {
 		r.desktopResult(request.RequestID, result)
 		return
 	}
-	if (operation.handler != seekHandler && request.PositionMS != nil) ||
+	if (operation.handler != serverHandler && request.Preference != nil) ||
+		(operation.handler != playlistHandler && request.PlaylistID != nil) ||
+		(operation.handler != seekHandler && request.PositionMS != nil) ||
 		(operation.handler != modesHandler && (request.Shuffle != nil || request.RepeatMode != nil || request.ContinuousPlayback != nil)) {
 		result := failed("invalid_parameters", "Parametros ajenos a la operacion")
 		r.desktopResults[request.RequestID] = result
@@ -35,6 +37,12 @@ func (r *Runtime) executeDesktop(request DesktopRequest) {
 	}
 	if operation.handler == volumeHandler {
 		result := r.setDesktopVolume(request)
+		r.desktopResults[request.RequestID] = result
+		r.desktopResult(request.RequestID, result)
+		return
+	}
+	if operation.handler == playlistHandler {
+		result := r.playDesktopPlaylist(request)
 		r.desktopResults[request.RequestID] = result
 		r.desktopResult(request.RequestID, result)
 		return
@@ -52,6 +60,15 @@ func (r *Runtime) executeDesktop(request DesktopRequest) {
 	}
 	if request.Volume != nil {
 		result := failed("invalid_volume", "Solo volume admite el parametro volume")
+		r.desktopResults[request.RequestID] = result
+		r.desktopResult(request.RequestID, result)
+		return
+	}
+	r.mu.Lock()
+	serverControl := r.config.ServerControl
+	r.mu.Unlock()
+	if operation.handler == serverHandler || (serverControl && (request.Action == "play" || request.Action == "next" || request.Action == "previous" || request.Action == "resume")) {
+		result := r.forwardDesktop(request)
 		r.desktopResults[request.RequestID] = result
 		r.desktopResult(request.RequestID, result)
 		return

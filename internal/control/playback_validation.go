@@ -38,12 +38,12 @@ func sameSnapshot(a, b Config) bool {
 			return false
 		}
 		if z.Playlist != nil {
-			if z.Playlist.Name != other.Playlist.Name {
+			if z.Playlist.Name != other.Playlist.Name || z.Playlist.CoverURL != other.Playlist.CoverURL {
 				return false
 			}
 			for j, song := range z.Playlist.Songs {
 				otherSong := other.Playlist.Songs[j]
-				if song.Title != otherSong.Title || !reflect.DeepEqual(song.Artist, otherSong.Artist) {
+				if song.Title != otherSong.Title || song.CoverURL != otherSong.CoverURL || !reflect.DeepEqual(song.Artist, otherSong.Artist) {
 					return false
 				}
 			}

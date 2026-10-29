@@ -17,10 +17,14 @@ type WebSocketConfig struct {
 }
 
 type Config struct {
-	Profile  string `json:"profile"`
-	DeviceID string `json:"device_id"`
-	Revision int64  `json:"config_revision"`
-	Zones    []Zone `json:"zones"`
+	ZoneBackgrounds map[string]string            `json:"zone_backgrounds"`
+	ServerControl   bool                         `json:"server_control"`
+	SongPreferences map[string]map[string]string `json:"song_preferences"`
+	Playlists       []Playlist                   `json:"playlists"`
+	Profile         string                       `json:"profile"`
+	DeviceID        string                       `json:"device_id"`
+	Revision        int64                        `json:"config_revision"`
+	Zones           []Zone                       `json:"zones"`
 }
 
 type Zone struct {
@@ -41,12 +45,14 @@ type Output struct {
 }
 
 type Playlist struct {
-	ID    string `json:"playlist_id"`
-	Name  string `json:"name"`
-	Songs []Song `json:"songs"`
+	CoverURL string `json:"cover_url"`
+	ID       string `json:"playlist_id"`
+	Name     string `json:"name"`
+	Songs    []Song `json:"songs"`
 }
 
 type Song struct {
+	CoverURL       string      `json:"cover_url"`
 	ID             string      `json:"song_id"`
 	Title          string      `json:"title"`
 	Artist         *string     `json:"artist"`

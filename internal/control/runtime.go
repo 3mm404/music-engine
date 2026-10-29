@@ -17,6 +17,8 @@ import (
 // Runtime synchronizes configuration, durable commands and observed zone state.
 type Runtime struct {
 	observer       func(DesktopEvent)
+	coverPaths     map[string]string
+	telemetry      performanceSampler
 	desktopResults map[string]Result
 	localVolumes   map[string]int
 	sharedStereo   bool
@@ -105,6 +107,15 @@ func RunProfileDesktop(ctx context.Context, server, token, version, stateDir, pr
 	}
 	defer journal.Close()
 	r := &Runtime{client: client, journal: journal, deviceID: session.DeviceID, sharedStereo: audio.IsSharedStereo(output), observer: observer}
+	if observer != nil {
+		coverCtx, cancelCovers := context.WithCancel(ctx)
+		coversDone := make(chan struct{})
+		go func() {
+			defer close(coversDone)
+			r.cacheCovers(coverCtx, filepath.Join(stateDir, "covers"))
+		}()
+		defer func() { cancelCovers(); <-coversDone }()
+	}
 	if profile == PlaybackProfile || profile == MonoProfile {
 		media := decoder.HTTPS{Client: &http.Client{Transport: client.http.Transport}}
 		if output == nil && profile == MonoProfile {

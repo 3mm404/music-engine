@@ -9,6 +9,8 @@ const (
 	volumeHandler
 	seekHandler
 	modesHandler
+	playlistHandler
+	serverHandler
 )
 
 type desktopOperation struct {
@@ -26,6 +28,8 @@ var desktopOperations = []desktopOperation{
 	{"volume", volumeHandler},
 	{"seek", seekHandler},
 	{"playback_modes", modesHandler},
+	{"play_playlist", playlistHandler},
+	{"song_preference", serverHandler},
 }
 
 func findDesktopOperation(name string) (desktopOperation, bool) {
